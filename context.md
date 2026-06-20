@@ -41,10 +41,14 @@ Webcam Buffer
      ▼
 MediaPipe Holistic Keypoints
      ├── Manual Stream (Hands + Pose) ──┐
-     └── Non-Manual Stream (Face Mesh) ─┴─► Concatenation → Linear Projection → Conformer → T5
+     └── Non-Manual Stream (Face Mesh) ─┴─► Geometric Normalization → Concatenation → Linear Projection → Conformer → T5
 ```
-- Manual + non-manual landmarks are concatenated along the feature dimension (258 manual features + 276 face expression features = 534 total features per frame) and projected to `d_model` via a simple Linear layer.
-- Facial Expression Mesh: Face coordinates are filtered to a 92-landmark subset (eyebrows, eyes, lips) in the extraction script to reduce dimensionality by 80% (configurable back to 468 via a single flag).
+* **Geometric Normalization**: Landmarks are normalized in the dataset loader to be translation and scale invariant:
+  * **Pose**: Centered relative to the mid-shoulder point and scaled by shoulder width.
+  * **Hands**: Centered relative to their respective wrist coordinates (landmark index 0) to capture translation-invariant hand shapes.
+  * **Face**: Centered relative to the mesh centroid.
+* **Feature Concatenation**: Manual + non-manual normalized landmarks are concatenated along the feature dimension (258 manual features + 276 face expression features = 534 total features per frame) and projected to `d_model` via a simple Linear layer.
+* **Facial Expression Mesh**: Face coordinates are filtered to a 92-landmark subset (eyebrows, eyes, lips) in the extraction script to reduce dimensionality by 80% (configurable back to 468 via a single flag).
 - Decoder: Pretrained `t5-small` decoder fine-tuned gloss-free. Using a pretrained language model leverages existing English syntax knowledge, ensuring fast training convergence on Kaggle GPUs.
 - Encoder Architecture: Conformer Encoder (Gulati-style blocks) containing depthwise temporal convolutions and self-attention, providing local temporal bias for fast training.
 
@@ -73,12 +77,12 @@ MediaPipe Holistic Keypoints
 
 ## Roadmap
 ```
-1. Data pipeline & Extraction — MediaPipe landmarks extraction on WLASL and YouTube-ASL subsets (pose, hands, 92 expression face landmarks).
-2. Real-World Data Validation (Phase 0.1) — Profile real coordinate dataset samples (sequence lengths, tracking drops, noise).
-3. Memory Profiling & Scaling (Phase 0.2) — Run a dry-run training epoch with T5-Small on Kaggle to set VRAM, batch size, and truncation bounds.
-4. Model Implementation — Build the PyTorch dataset loaders, Conformer encoder, and T5-Small translation wrapper.
-5. Training & Evaluation — Train the end-to-end model on Kaggle and evaluate performance using BLEU-4 and WER.
-6. Error Analysis — Perform qualitative error analysis on model predictions (identifying failures like speed or occlusion).
+1. Data pipeline & Extraction — MediaPipe landmarks extraction (pose, hands, 92 expression face landmarks). (Completed)
+2. Real-World Data Validation (Phase 0.1) — Profile real coordinate dataset samples (lengths, drops, noise). (Completed)
+3. Memory Profiling & Scaling (Phase 0.2) — Run a dry-run training epoch with T5-Small to set VRAM and batch bounds. (Completed)
+4. Model Implementation — Build PyTorch dataloaders with geometric normalization, Conformer, and T5-Small wrapper. (Completed)
+5. Training & Evaluation — Train model on Kaggle GPUs and evaluate using offline BLEU-4 and WER. (Local dry run verified)
+6. Error Analysis — Perform qualitative error analysis on model predictions (identifying failures like speed or occlusion). (Pending)
 ```
 
 ---
