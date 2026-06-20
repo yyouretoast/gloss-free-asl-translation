@@ -108,7 +108,7 @@ class ASLLandmarkExtractor:
             'pose': np.stack(pose_list, axis=0) if pose_list else np.empty((0, 33, 4)),
             'left_hand': np.stack(left_hand_list, axis=0) if left_hand_list else np.empty((0, 21, 3)),
             'right_hand': np.stack(right_hand_list, axis=0) if right_hand_list else np.empty((0, 21, 3)),
-            'face': np.stack(face_list, axis=0) if face_list else np.empty((0, 468, 3))
+            'face': np.stack(face_list, axis=0) if face_list else np.empty((0, len(self.face_indices), 3))
         }
 
     @staticmethod
