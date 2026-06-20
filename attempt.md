@@ -67,7 +67,7 @@ We are building a landmark-based, gloss-free ASL translation system that transla
 | [requirements.txt](file:///c:/Users/Yassin/Desktop/code/ASL/requirements.txt) | Python dependencies list | Pinned `mediapipe==0.10.14`, added `jiwer` and `sacrebleu` metrics. |
 | [.gitignore](file:///c:/Users/Yassin/Desktop/code/ASL/.gitignore) | Git ignore configurations | Excludes `.venv/`, `data/`, `results/`, and log files. |
 | [src/__init__.py](file:///c:/Users/Yassin/Desktop/code/ASL/src/__init__.py) | Package initialization | Marks `src/` as a modular Python package. |
-| [src/data_pipeline.py](file:///c:/Users/Yassin/Desktop/code/ASL/src/data_pipeline.py) | Data pipeline engine | Extractor class processing frames to 543 coordinates. |
+| [src/data_pipeline.py](file:///c:/Users/Yassin/Desktop/code/ASL/src/data_pipeline.py) | Data pipeline engine | Extractor class processing frames to 534 coordinates. |
 | [src/validate_dataset.py](file:///c:/Users/Yassin/Desktop/code/ASL/src/validate_dataset.py) | Dataset validation script | Computes sequence and tracking failure aggregates. |
 | [src/dataset.py](file:///c:/Users/Yassin/Desktop/code/ASL/src/dataset.py) | PyTorch Dataset class | Performs wrist-relative hand and body geometric normalization. |
 | [src/models/manual_encoder.py](file:///c:/Users/Yassin/Desktop/code/ASL/src/models/manual_encoder.py) | Full Conformer Encoder | Custom Gulati-style blocks with pooling layers. |

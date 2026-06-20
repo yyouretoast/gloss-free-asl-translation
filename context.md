@@ -11,10 +11,13 @@ Reproduce and evaluate landmark-based gloss-free ASL translation, then quantify 
 - Development Model: Hybrid local/remote execution. Developed locally as modular Python scripts, executed on Kaggle GPUs for landmark extraction and model training.
 - Ruthless MVP Success Criteria: 
   1. Validate coordinate extraction on real ASL video samples.
-  2. Implement PyTorch dataset loader with proper padding and masking.
+  2. Implement PyTorch dataset loader with geometric normalization, padding, and masking.
   3. Build and train a Conformer Encoder -> Pretrained T5-Small Decoder model.
-  4. Evaluate using BLEU-4 and WER on validation splits.
-- Scoped-Out / Post-MVP Extensions: WLASL pretraining, cross-attention fusion ablation, ONNX/quantization optimization, and HF web demo. These are cut to guarantee project completion.
+  4. Perform a rigorous ablation study (comparing include_face=True vs. False) to measure the impact of non-manual signals.
+  5. Export model to ONNX format for optimized inference.
+  6. Deploy an interactive Gradio web application on Hugging Face Spaces.
+  7. Evaluate model using BLEU-4 and WER on validation splits.
+- Scoped-Out / Post-MVP Extensions: WLASL pretraining and complex cross-attention fusion modules (retaining lightweight manual vs. face ablation, ONNX serialization, and Gradio web demo in MVP).
 
 ## Isn't
 - A deployed app with real users
@@ -112,6 +115,7 @@ MediaPipe Holistic Keypoints
 ---
 
 ## Key References
+- Conformer (Gulati et al., Interspeech 2020) — core encoder model architecture basis
 - YouTube-ASL (Uthus et al., NeurIPS 2023) — primary training corpus + architecture basis
 - Sign2GPT (Wong, Camgöz, Bowden, arXiv 2024) — gloss-free SLT precedent
 - Sign Language Transformers (Camgoz, Koller, Hadfield, Bowden, CVPR 2020) — optional future enhancement, needs gloss data not currently used
