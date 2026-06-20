@@ -125,7 +125,7 @@ def analyze_single_file(file_path):
         'signer_id': signer_id
     }
 
-def validate_dataset(directory_path):
+def validate_dataset(directory_path, limit=50):
     """
     Scans a directory of landmark .npz files or OpenPose JSON directories and prints aggregate statistics.
     """
@@ -144,6 +144,10 @@ def validate_dataset(directory_path):
     if not files:
         print(f"No coordinate files (.npz) or OpenPose directories found in {directory_path}")
         return False
+        
+    if limit and len(files) > limit:
+        print(f"Dataset contains {len(files)} files/folders. Limiting analysis to first {limit} items for speed.")
+        files = files[:limit]
 
     print(f"Scanning {len(files)} files in {directory_path}...\n")
     
@@ -244,6 +248,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="Validate ASL landmark dataset stats.")
     parser.add_argument("--data_dir", type=str, default="data/landmarks", help="Path to landmark files.")
+    parser.add_argument("--limit", type=int, default=50, help="Maximum number of files/folders to profile.")
     args = parser.parse_args()
     
     # Resolve absolute path
@@ -259,7 +264,7 @@ def main():
     if not os.path.exists(dir_path) or (not has_npz and not has_subdirs):
         generate_mock_dataset(dir_path, num_files=5)
         
-    validate_dataset(dir_path)
+    validate_dataset(dir_path, limit=args.limit)
 
 if __name__ == "__main__":
     main()
