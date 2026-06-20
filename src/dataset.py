@@ -1,5 +1,6 @@
 import os
 import glob
+import json
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -31,6 +32,15 @@ class ASLLandmarkDataset(Dataset):
             self.filepaths = file_list
         else:
             self.filepaths = glob.glob(os.path.join(data_dir, "*.npz"))
+            # If no .npz files are found, dynamically resolve OpenPose JSON folders
+            if len(self.filepaths) == 0:
+                # Search for directories that contain json keypoint files
+                json_dirs = glob.glob(os.path.join(data_dir, "**/openpose_output/json/*"), recursive=True)
+                self.filepaths = [d for d in json_dirs if os.path.isdir(d)]
+                
+                # If still empty, scan directories inside data_dir itself
+                if len(self.filepaths) == 0:
+                    self.filepaths = [os.path.join(data_dir, d) for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
 
     def __len__(self):
         return len(self.filepaths)
@@ -44,12 +54,21 @@ class ASLLandmarkDataset(Dataset):
         """
         # 1. Pose Normalization
         pose_coords = pose[..., :3]
-        visibility = pose[..., 3:4]
+        visibility = pose[..., 3:4] if pose.shape[-1] == 4 else pose[..., 2:3]
         
-        mid_shoulder = (pose_coords[:, 11, :] + pose_coords[:, 12, :]) / 2.0  # (num_frames, 3)
+        # OpenPose BODY_25 has 25 keypoints (shoulders are index 2 and 5)
+        # MediaPipe has 33 keypoints (shoulders are index 11 and 12)
+        if pose.shape[1] == 25:
+            shoulder_idx_1 = 5
+            shoulder_idx_2 = 2
+        else:
+            shoulder_idx_1 = 11
+            shoulder_idx_2 = 12
+            
+        mid_shoulder = (pose_coords[:, shoulder_idx_1, :] + pose_coords[:, shoulder_idx_2, :]) / 2.0  # (num_frames, 3)
         mid_shoulder = np.expand_dims(mid_shoulder, axis=1)  # (num_frames, 1, 3)
         
-        shoulder_width = np.linalg.norm(pose_coords[:, 11, :] - pose_coords[:, 12, :], axis=-1, keepdims=True)
+        shoulder_width = np.linalg.norm(pose_coords[:, shoulder_idx_1, :] - pose_coords[:, shoulder_idx_2, :], axis=-1, keepdims=True)
         shoulder_width = np.expand_dims(shoulder_width, axis=1)  # (num_frames, 1, 1)
         
         # Clip shoulder width to a safe minimum of 0.01 to prevent NaNs or division by zero
@@ -75,18 +94,57 @@ class ASLLandmarkDataset(Dataset):
         file_path = self.filepaths[idx]
         basename = os.path.splitext(os.path.basename(file_path))[0]
         
-        # Load landmarks
-        try:
-            data = np.load(file_path)
-            pose = data['pose']          # shape (num_frames, 33, 4)
-            left_hand = data['left_hand']  # shape (num_frames, 21, 3)
-            right_hand = data['right_hand'] # shape (num_frames, 21, 3)
-            face = data['face']          # shape (num_frames, 92, 3)
-        except Exception as e:
-            # Return dummy zero tensors if load fails
-            raise IOError(f"Failed to load landmark file {file_path}: {e}")
-
-        num_frames = pose.shape[0]
+        # Load landmarks (handling both .npz files and directories of OpenPose JSONs)
+        if os.path.isdir(file_path):
+            json_files = sorted(glob.glob(os.path.join(file_path, "*.json")))
+            num_frames = len(json_files)
+            
+            if num_frames == 0:
+                raise ValueError(f"OpenPose JSON folder {file_path} contains 0 frames.")
+                
+            pose_list, left_hand_list, right_hand_list, face_list = [], [], [], []
+            
+            for jf in json_files:
+                try:
+                    with open(jf, 'r') as f:
+                        data = json.load(f)
+                    
+                    people = data.get('people', [])
+                    if people:
+                        p = people[0]
+                        # OpenPose: pose has 75 features, face has 210, hands have 63
+                        pose_arr = np.array(p.get('pose_keypoints_2d', [])).reshape(25, 3)
+                        face_arr = np.array(p.get('face_keypoints_2d', [])).reshape(70, 3)
+                        lh_arr = np.array(p.get('hand_left_keypoints_2d', [])).reshape(21, 3)
+                        rh_arr = np.array(p.get('hand_right_keypoints_2d', [])).reshape(21, 3)
+                    else:
+                        pose_arr = np.zeros((25, 3))
+                        face_arr = np.zeros((70, 3))
+                        lh_arr = np.zeros((21, 3))
+                        rh_arr = np.zeros((21, 3))
+                        
+                    pose_list.append(pose_arr)
+                    face_list.append(face_arr)
+                    left_hand_list.append(lh_arr)
+                    right_hand_list.append(rh_arr)
+                except Exception as e:
+                    raise IOError(f"Failed to read OpenPose file {jf}: {e}")
+                    
+            pose = np.stack(pose_list, axis=0)
+            left_hand = np.stack(left_hand_list, axis=0)
+            right_hand = np.stack(right_hand_list, axis=0)
+            face = np.stack(face_list, axis=0)
+        else:
+            try:
+                data = np.load(file_path)
+                pose = data['pose']          # shape (num_frames, 33, 4)
+                left_hand = data['left_hand']  # shape (num_frames, 21, 3)
+                right_hand = data['right_hand'] # shape (num_frames, 21, 3)
+                face = data['face']          # shape (num_frames, 92, 3)
+            except Exception as e:
+                raise IOError(f"Failed to load landmark file {file_path}: {e}")
+                
+            num_frames = pose.shape[0]
         if num_frames == 0:
             raise ValueError(f"Landmark file {file_path} contains 0 frames. Corrupt sequence.")
 
