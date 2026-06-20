@@ -123,11 +123,35 @@ def main():
     
     if args.metadata_file:
         import pandas as pd
+        import glob
         print(f"Loading metadata from {args.metadata_file}")
-        if args.metadata_file.endswith('.tsv') or args.metadata_file.endswith('.txt'):
-            df = pd.read_csv(args.metadata_file, sep=None, engine='python')
+        
+        # If metadata_file matches a split (e.g. "_train.csv"), merge all splits dynamically
+        if '_train.' in args.metadata_file or '_val.' in args.metadata_file or '_test.' in args.metadata_file:
+            dir_name = os.path.dirname(args.metadata_file)
+            base_name = os.path.basename(args.metadata_file)
+            
+            # Identify wildcard pattern
+            wildcard = base_name
+            for term in ['_train', '_val', '_test']:
+                if term in base_name:
+                    wildcard = base_name.replace(term, '_*')
+                    break
+            pattern = os.path.join(dir_name, wildcard)
+            csv_files = sorted(glob.glob(pattern))
+            print(f"Detected split manifests. Merging: {csv_files}")
+            
+            dfs = []
+            for f_path in csv_files:
+                sep = '\t' if 'realigned' in f_path else None
+                dfs.append(pd.read_csv(f_path, sep=sep, engine='python'))
+            df = pd.concat(dfs, ignore_index=True)
         else:
-            df = pd.read_csv(args.metadata_file)
+            if args.metadata_file.endswith('.tsv') or args.metadata_file.endswith('.txt'):
+                df = pd.read_csv(args.metadata_file, sep=None, engine='python')
+            else:
+                sep = '\t' if 'realigned' in args.metadata_file else ','
+                df = pd.read_csv(args.metadata_file, sep=sep)
             
         # Detect appropriate identifier and label columns dynamically
         file_col = [c for c in df.columns if any(x in c.lower() for x in ['id', 'file', 'video', 'key', 'name'])]
