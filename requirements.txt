@@ -6,3 +6,5 @@ torch
 torchvision
 transformers
 tqdm
+jiwer
+sacrebleu

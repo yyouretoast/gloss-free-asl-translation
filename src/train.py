@@ -37,6 +37,9 @@ class ASLTranslationModel(nn.Module):
         else:
             self.dimension_projection = nn.Identity()
 
+        # Expose generation config for Seq2SeqTrainer
+        self.generation_config = self.t5.generation_config
+
     def forward(self, input_features, attention_mask=None, labels=None, decoder_attention_mask=None, **kwargs):
         # Extract visual sequence representation
         # outputs shape: (batch, seq_len // 2, d_model)
@@ -48,10 +51,13 @@ class ASLTranslationModel(nn.Module):
         # Pass visual embeddings directly as T5 encoder output hidden states
         encoder_outputs = (outputs,)
         
+        # T5 expects 1/True for valid, 0/False for padding frames
+        t5_attention_mask = (~downsampled_mask).long() if downsampled_mask is not None else None
+        
         # Run T5 Decoder forward pass
         return self.t5(
             encoder_outputs=encoder_outputs,
-            attention_mask=downsampled_mask, # Mask padded frames
+            attention_mask=t5_attention_mask,
             labels=labels,
             decoder_attention_mask=decoder_attention_mask
         )
@@ -66,10 +72,19 @@ class ASLTranslationModel(nn.Module):
             outputs = self.dimension_projection(outputs)
             encoder_outputs = (outputs,)
             
+            # T5 expects 1/True for valid, 0/False for padding frames
+            t5_attention_mask = (~downsampled_mask).long() if downsampled_mask is not None else None
+            
+            # Clean kwargs that are not accepted by T5's generate method
+            kwargs.pop('file_ids', None)
+            kwargs.pop('labels', None)
+            kwargs.pop('decoder_attention_mask', None)
+            
             # Use T5's auto-regressive generation
             return self.t5.generate(
                 encoder_outputs=encoder_outputs,
-                attention_mask=downsampled_mask,
+                attention_mask=t5_attention_mask,
+                bos_token_id=self.t5.config.decoder_start_token_id,
                 **kwargs
             )
 
@@ -160,14 +175,47 @@ def main():
         remove_unused_columns=False
     )
 
-    # 7. Initialize Trainer
+    # 7. Define metrics computation
+    import numpy as np
+    import jiwer
+    import sacrebleu
+
+    def compute_metrics(eval_preds):
+        preds, labels = eval_preds
+        if isinstance(preds, tuple):
+            preds = preds[0]
+        
+        # Replace -100 in labels so they can be decoded
+        labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+        
+        decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+        
+        # Clean whitespaces
+        decoded_preds = [p.strip() for p in decoded_preds]
+        decoded_labels = [l.strip() for l in decoded_labels]
+        
+        # Avoid empty strings causing jiwer errors
+        decoded_preds = [p if p else " " for p in decoded_preds]
+        decoded_labels = [l if l else " " for l in decoded_labels]
+        
+        wer = jiwer.wer(decoded_labels, decoded_preds)
+        bleu = sacrebleu.corpus_bleu(decoded_preds, [decoded_labels]).score
+        
+        return {
+            "bleu": float(bleu),
+            "wer": float(wer)
+        }
+
+    # 8. Initialize Trainer
     trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         data_collator=collate_fn,
-        processing_class=tokenizer
+        processing_class=tokenizer,
+        compute_metrics=compute_metrics
     )
 
     # 8. Start Training Loop

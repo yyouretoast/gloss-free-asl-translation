@@ -9,7 +9,7 @@ class ASLLandmarkDataset(Dataset):
     A PyTorch Dataset that loads pre-extracted landmark files (.npz)
     and maps them to target English text labels.
     """
-    def __init__(self, data_dir, metadata_dict=None, file_list=None, max_len=150, include_face=True):
+    def __init__(self, data_dir, metadata_dict=None, file_list=None, max_len=150, include_face=True, normalize=True):
         """
         Args:
             data_dir (str): Directory containing .npz files.
@@ -19,11 +19,13 @@ class ASLLandmarkDataset(Dataset):
             max_len (int): Maximum frame sequence length. Longer sequences are truncated.
             include_face (bool): If True, concatenates face expression landmarks (276 dims)
                                  with manual landmarks (258 dims) for 534 dims total.
+            normalize (bool): If True, applies frame-level geometric normalization.
         """
         self.data_dir = data_dir
         self.metadata_dict = metadata_dict if metadata_dict is not None else {}
         self.max_len = max_len
         self.include_face = include_face
+        self.normalize = normalize
         
         if file_list is not None:
             self.filepaths = file_list
@@ -32,6 +34,40 @@ class ASLLandmarkDataset(Dataset):
 
     def __len__(self):
         return len(self.filepaths)
+
+    def _normalize_landmarks(self, pose, left_hand, right_hand, face):
+        """
+        Normalizes landmark coordinates:
+        - Pose: centered relative to mid-shoulder, scaled by shoulder width.
+        - Hands: centered relative to their respective wrist joints.
+        - Face: centered relative to face centroid.
+        """
+        # 1. Pose Normalization
+        pose_coords = pose[..., :3]
+        visibility = pose[..., 3:4]
+        
+        mid_shoulder = (pose_coords[:, 11, :] + pose_coords[:, 12, :]) / 2.0  # (num_frames, 3)
+        mid_shoulder = np.expand_dims(mid_shoulder, axis=1)  # (num_frames, 1, 3)
+        
+        shoulder_width = np.linalg.norm(pose_coords[:, 11, :] - pose_coords[:, 12, :], axis=-1, keepdims=True)
+        shoulder_width = np.expand_dims(shoulder_width, axis=1)  # (num_frames, 1, 1)
+        shoulder_width = np.where(shoulder_width < 1e-5, 1.0, shoulder_width)
+        
+        norm_pose_coords = (pose_coords - mid_shoulder) / shoulder_width
+        norm_pose = np.concatenate([norm_pose_coords, visibility], axis=-1)
+        
+        # 2. Hand Normalization (Wrist-relative)
+        left_wrist = np.expand_dims(left_hand[:, 0, :], axis=1)  # (num_frames, 1, 3)
+        norm_left_hand = left_hand - left_wrist
+        
+        right_wrist = np.expand_dims(right_hand[:, 0, :], axis=1)  # (num_frames, 1, 3)
+        norm_right_hand = right_hand - right_wrist
+        
+        # 3. Face Normalization (Centroid-relative)
+        face_centroid = np.mean(face, axis=1, keepdims=True)  # (num_frames, 1, 3)
+        norm_face = face - face_centroid
+        
+        return norm_pose, norm_left_hand, norm_right_hand, norm_face
 
     def __getitem__(self, idx):
         file_path = self.filepaths[idx]
@@ -47,6 +83,9 @@ class ASLLandmarkDataset(Dataset):
         except Exception as e:
             # Return dummy zero tensors if load fails
             raise IOError(f"Failed to load landmark file {file_path}: {e}")
+
+        if self.normalize:
+            pose, left_hand, right_hand, face = self._normalize_landmarks(pose, left_hand, right_hand, face)
 
         num_frames = pose.shape[0]
         
