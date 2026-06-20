@@ -4,24 +4,66 @@ import numpy as np
 
 def analyze_single_file(file_path):
     """
-    Analyzes a single landmark .npz file to compute statistics.
+    Analyzes a single landmark .npz file or OpenPose directory to compute statistics.
     """
-    try:
-        data = np.load(file_path)
-    except Exception as e:
-        print(f"Error loading {file_path}: {e}")
-        return None
+    if os.path.isdir(file_path):
+        import json
+        json_files = sorted(glob.glob(os.path.join(file_path, "*.json")))
+        num_frames = len(json_files)
+        if num_frames == 0:
+            return None
+        
+        pose_list, left_hand_list, right_hand_list, face_list = [], [], [], []
+        for jf in json_files:
+            try:
+                with open(jf, 'r') as f:
+                    data = json.load(f)
+                people = data.get('people', [])
+                if people:
+                    p = people[0]
+                    pose_arr = np.array(p.get('pose_keypoints_2d', [])).reshape(25, 3)
+                    face_arr = np.array(p.get('face_keypoints_2d', [])).reshape(70, 3)
+                    lh_arr = np.array(p.get('hand_left_keypoints_2d', [])).reshape(21, 3)
+                    rh_arr = np.array(p.get('hand_right_keypoints_2d', [])).reshape(21, 3)
+                else:
+                    pose_arr = np.zeros((25, 3))
+                    face_arr = np.zeros((70, 3))
+                    lh_arr = np.zeros((21, 3))
+                    rh_arr = np.zeros((21, 3))
+                pose_list.append(pose_arr)
+                face_list.append(face_arr)
+                left_hand_list.append(lh_arr)
+                right_hand_list.append(rh_arr)
+            except Exception:
+                return None
+        
+        pose = np.stack(pose_list, axis=0)
+        left_hand = np.stack(left_hand_list, axis=0)
+        right_hand = np.stack(right_hand_list, axis=0)
+        face = np.stack(face_list, axis=0)
+        
+        left_wrist_pose_idx = 7
+        right_wrist_pose_idx = 4
+    else:
+        try:
+            data = np.load(file_path)
+        except Exception as e:
+            print(f"Error loading {file_path}: {e}")
+            return None
 
-    # Check keys
-    required_keys = {'pose', 'left_hand', 'right_hand', 'face'}
-    if not required_keys.issubset(data.files):
-        print(f"Warning: {file_path} is missing keys. Found: {list(data.files)}")
-        return None
+        # Check keys
+        required_keys = {'pose', 'left_hand', 'right_hand', 'face'}
+        if not required_keys.issubset(data.files):
+            print(f"Warning: {file_path} is missing keys. Found: {list(data.files)}")
+            return None
 
-    pose = data['pose']
-    left_hand = data['left_hand']
-    right_hand = data['right_hand']
-    face = data['face']
+        pose = data['pose']
+        left_hand = data['left_hand']
+        right_hand = data['right_hand']
+        face = data['face']
+        
+        left_wrist_pose_idx = 15
+        right_wrist_pose_idx = 16
 
     num_frames = pose.shape[0]
     if num_frames == 0:
@@ -35,7 +77,6 @@ def analyze_single_file(file_path):
         }
 
     # 1. Check hand missing tracking (all zeros in a frame)
-    # A hand is missing if all its landmark coordinates are 0
     left_hand_missing = np.all(left_hand == 0, axis=(1, 2))
     right_hand_missing = np.all(right_hand == 0, axis=(1, 2))
     
@@ -47,12 +88,11 @@ def analyze_single_file(file_path):
     face_missing_pct = (np.sum(face_missing) / num_frames) * 100.0
 
     # 3. Estimate coordinate noise (average delta of wrist joints frame-to-frame)
-    # Pose indices for wrists: 15 (left wrist), 16 (right wrist)
     avg_wrist_noise = 0.0
     if num_frames > 1:
         # Extract left and right wrist (x, y, z)
-        left_wrists = pose[:, 15, :3]
-        right_wrists = pose[:, 16, :3]
+        left_wrists = pose[:, left_wrist_pose_idx, :3]
+        right_wrists = pose[:, right_wrist_pose_idx, :3]
         
         # Calculate frame-to-frame Euclidean distance
         left_deltas = np.linalg.norm(np.diff(left_wrists, axis=0), axis=1)
@@ -87,13 +127,22 @@ def analyze_single_file(file_path):
 
 def validate_dataset(directory_path):
     """
-    Scans a directory of landmark .npz files and prints aggregate statistics.
+    Scans a directory of landmark .npz files or OpenPose JSON directories and prints aggregate statistics.
     """
     search_path = os.path.join(directory_path, "*.npz")
     files = glob.glob(search_path)
     
+    # If no .npz files, try finding directories of JSONs (OpenPose structure)
     if not files:
-        print(f"No .npz files found in {directory_path}")
+        json_dirs = glob.glob(os.path.join(directory_path, "**/openpose_output/json/*"), recursive=True)
+        files = [d for d in json_dirs if os.path.isdir(d)]
+        
+        # Fallback to directories directly inside directory_path
+        if not files and os.path.exists(directory_path):
+            files = [os.path.join(directory_path, d) for d in os.listdir(directory_path) if os.path.isdir(os.path.join(directory_path, d))]
+            
+    if not files:
+        print(f"No coordinate files (.npz) or OpenPose directories found in {directory_path}")
         return False
 
     print(f"Scanning {len(files)} files in {directory_path}...\n")
@@ -200,8 +249,14 @@ def main():
     # Resolve absolute path
     dir_path = os.path.abspath(args.data_dir)
     
+    # Check if there are any npz files or subdirectories
+    has_npz = len(glob.glob(os.path.join(dir_path, "*.npz"))) > 0
+    has_subdirs = False
+    if os.path.exists(dir_path):
+        has_subdirs = any(os.path.isdir(os.path.join(dir_path, d)) for d in os.listdir(dir_path))
+        
     # Generate mock files if path is empty/doesn't exist for quick local verification
-    if not os.path.exists(dir_path) or len(glob.glob(os.path.join(dir_path, "*.npz"))) == 0:
+    if not os.path.exists(dir_path) or (not has_npz and not has_subdirs):
         generate_mock_dataset(dir_path, num_files=5)
         
     validate_dataset(dir_path)
