@@ -1,6 +1,7 @@
 import os
 import torch
 import torch.nn as nn
+from collections import OrderedDict
 from transformers import (
     T5TokenizerFast, 
     T5ForConditionalGeneration, 
@@ -94,7 +95,7 @@ class ASLTranslationModel(nn.Module):
         a RuntimeError about shared memory tensors (like T5 embed_tokens/shared weights).
         """
         sd = super().state_dict(*args, destination=destination, prefix=prefix, keep_vars=keep_vars)
-        return {k: v.clone() for k, v in sd.items()}
+        return OrderedDict((k, v.clone()) for k, v in sd.items())
 
 def main():
     import argparse
@@ -104,6 +105,8 @@ def main():
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size per device")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--output_dir", type=str, default="results/checkpoints", help="Output checkpoints folder")
+    parser.add_argument("--metadata_file", type=str, default=None, help="Path to metadata CSV/TSV file mapping video IDs to translations")
+    parser.add_argument("--no_face", action="store_true", help="Disable facial expression landmarks (for ablation study)")
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -114,42 +117,143 @@ def main():
     print(f"Loading tokenizer: {t5_model_name}")
     tokenizer = T5TokenizerFast.from_pretrained(t5_model_name)
 
-    # 2. Setup mock metadata dict (For actual run on Kaggle, parse the real CSV file)
-    # Mapping coordinates files to English sentences
-    mock_metadata = {
-        'signer01_video_0000': "hello",
-        'signer01_video_0001': "please thank you",
-        'signer01_video_0002': "good morning",
-        'signer03_video_0003': "how are you",
-        'signer01_video_0004': "sign language"
-    }
+    # 2. Setup metadata mapping and signer info
+    metadata = {}
+    video_to_signer = {}
+    
+    if args.metadata_file:
+        import pandas as pd
+        print(f"Loading metadata from {args.metadata_file}")
+        if args.metadata_file.endswith('.tsv') or args.metadata_file.endswith('.txt'):
+            df = pd.read_csv(args.metadata_file, sep=None, engine='python')
+        else:
+            df = pd.read_csv(args.metadata_file)
+            
+        # Detect appropriate identifier and label columns dynamically
+        file_col = [c for c in df.columns if any(x in c.lower() for x in ['id', 'file', 'video', 'key', 'name'])]
+        text_col = [c for c in df.columns if any(x in c.lower() for x in ['text', 'trans', 'gloss', 'sentence', 'caption'])]
+        signer_col = [c for c in df.columns if any(x in c.lower() for x in ['signer', 'channel', 'uploader', 'author', 'subject'])]
+        
+        if file_col and text_col:
+            f_col = file_col[0]
+            t_col = text_col[0]
+            print(f"Mapping columns: File ID '{f_col}' -> Text '{t_col}'")
+            metadata = dict(zip(df[f_col].astype(str), df[t_col].astype(str)))
+            if signer_col:
+                s_col = signer_col[0]
+                print(f"Mapping signer ID column: '{s_col}'")
+                video_to_signer = dict(zip(df[f_col].astype(str), df[s_col].astype(str)))
+        else:
+            raise ValueError(f"Could not find matching columns. Columns: {df.columns.tolist()}")
+    else:
+        print("Warning: No metadata_file provided. Falling back to mock metadata.")
+        metadata = {
+            'signer01_video_0000': "hello",
+            'signer01_video_0001': "please thank you",
+            'signer01_video_0002': "good morning",
+            'signer03_video_0003': "how are you",
+            'signer01_video_0004': "sign language"
+        }
 
-    # 3. Create Dataset
-    print(f"Loading dataset from: {args.data_dir}")
-    dataset = ASLLandmarkDataset(
+    # 3. Create complete Dataset to extract file list
+    include_face = not args.no_face
+    print(f"Loading dataset from: {args.data_dir} (include_face={include_face})")
+    full_dataset = ASLLandmarkDataset(
         data_dir=args.data_dir,
-        metadata_dict=mock_metadata,
+        metadata_dict=metadata,
         max_len=150,
-        include_face=True  # 534 input dimensions
+        include_face=include_face
+    )
+    
+    if len(full_dataset) == 0:
+        raise ValueError(f"No landmark files found in {args.data_dir}. Verify path.")
+
+    # 4. Partition files strictly by Signer ID (Signer-Independent splits)
+    from collections import defaultdict
+    signer_groups = defaultdict(list)
+    unknown_files = []
+    
+    for filepath in full_dataset.filepaths:
+        basename = os.path.splitext(os.path.basename(filepath))[0]
+        signer_id = None
+        
+        # Try to retrieve signer from metadata mapping
+        if basename in video_to_signer:
+            signer_id = str(video_to_signer[basename]).strip()
+            
+        # Try to infer from filename prefix (e.g. "signer01_video_0000" -> "signer01")
+        if not signer_id:
+            parts = basename.split('_')
+            if len(parts) > 1 and (parts[0].isalnum() or 'signer' in parts[0].lower() or 'channel' in parts[0].lower()):
+                signer_id = parts[0]
+                
+        if signer_id and signer_id.lower() != 'unknown':
+            signer_groups[signer_id].append(filepath)
+        else:
+            unknown_files.append(filepath)
+            
+    sorted_signers = sorted(list(signer_groups.keys()))
+    train_files = []
+    val_files = []
+    
+    if len(sorted_signers) > 0:
+        total_known_count = sum(len(signer_groups[s]) for s in sorted_signers)
+        target_train_count = 0.8 * total_known_count
+        current_train_count = 0
+        
+        for signer in sorted_signers:
+            files = signer_groups[signer]
+            if current_train_count < target_train_count:
+                train_files.extend(files)
+                current_train_count += len(files)
+            else:
+                val_files.extend(files)
+                
+        # Drop unknown-signer files from validation/evaluation entirely to prevent leakage
+        train_files.extend(unknown_files)
+        print(f"Signer splits: {len(train_files)} train (includes {len(unknown_files)} unknown-signer clips), {len(val_files)} validation files.")
+    else:
+        # Fallback to standard random split if no signer proxy info is available
+        print("\n" + "="*80)
+        print("WARNING: No signer, channel, or uploader metadata found in filenames or CSV columns.")
+        print("Falling back to standard random split. Note: validation metrics may suffer from signer data leakage.")
+        print("="*80 + "\n")
+        
+        all_files = full_dataset.filepaths
+        import random
+        random.seed(42)
+        shuffled = list(all_files)
+        random.shuffle(shuffled)
+        split_idx = int(0.8 * len(shuffled))
+        train_files = shuffled[:split_idx]
+        val_files = shuffled[split_idx:]
+        print(f"Fallback splits: {len(train_files)} train, {len(val_files)} validation files.")
+        
+    train_dataset = ASLLandmarkDataset(
+        data_dir=args.data_dir,
+        metadata_dict=metadata,
+        file_list=train_files,
+        max_len=150,
+        include_face=include_face
+    )
+    val_dataset = ASLLandmarkDataset(
+        data_dir=args.data_dir,
+        metadata_dict=metadata,
+        file_list=val_files,
+        max_len=150,
+        include_face=include_face
     )
 
-    # Split dataset into train and validation
-    train_size = int(0.8 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(
-        dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42)
-    )
-    print(f"Splits: {len(train_dataset)} train, {len(val_dataset)} validation samples.")
-
-    # 4. Collator
+    # 5. Collator
     # Pass tokenizer to collator to convert English targets to token IDs
     collate_fn = CollateLandmarks(tokenizer=tokenizer, max_target_len=30)
 
-    # 5. Initialize Model
-    # input_dim=534, d_model=512 matches t5-small config d_model
-    print("Initializing Model (Conformer -> T5-Small)...")
+    # 6. Initialize Model dynamically using input shape
+    sample_batch = train_dataset[0]
+    input_dim = sample_batch['features'].shape[1]
+    print(f"Initializing Model (Conformer -> T5-Small) with input_dim={input_dim}...")
     model = ASLTranslationModel(
-        input_dim=534,
+        input_dim=input_dim,
         d_model=512,
         t5_model_name=t5_model_name,
         num_layers=4,

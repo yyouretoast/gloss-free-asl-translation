@@ -194,11 +194,11 @@ def generate_mock_dataset(directory_path, num_files=5):
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Validate ASL landmark dataset stats.")
-    parser.add_index = parser.add_argument("--dir", type=str, default="data/landmarks", help="Path to landmark files.")
+    parser.add_argument("--data_dir", type=str, default="data/landmarks", help="Path to landmark files.")
     args = parser.parse_args()
     
     # Resolve absolute path
-    dir_path = os.path.abspath(args.dir)
+    dir_path = os.path.abspath(args.data_dir)
     
     # Generate mock files if path is empty/doesn't exist for quick local verification
     if not os.path.exists(dir_path) or len(glob.glob(os.path.join(dir_path, "*.npz"))) == 0:

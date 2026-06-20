@@ -39,8 +39,8 @@ class ASLLandmarkDataset(Dataset):
         """
         Normalizes landmark coordinates:
         - Pose: centered relative to mid-shoulder, scaled by shoulder width.
-        - Hands: centered relative to their respective wrist joints.
-        - Face: centered relative to face centroid.
+        - Hands: centered relative to their respective wrist joints and scaled by shoulder width.
+        - Face: centered relative to face centroid and scaled by shoulder width.
         """
         # 1. Pose Normalization
         pose_coords = pose[..., :3]
@@ -51,21 +51,23 @@ class ASLLandmarkDataset(Dataset):
         
         shoulder_width = np.linalg.norm(pose_coords[:, 11, :] - pose_coords[:, 12, :], axis=-1, keepdims=True)
         shoulder_width = np.expand_dims(shoulder_width, axis=1)  # (num_frames, 1, 1)
-        shoulder_width = np.where(shoulder_width < 1e-5, 1.0, shoulder_width)
+        
+        # Clip shoulder width to a safe minimum of 0.01 to prevent NaNs or division by zero
+        shoulder_width = np.clip(shoulder_width, a_min=0.01, a_max=None)
         
         norm_pose_coords = (pose_coords - mid_shoulder) / shoulder_width
         norm_pose = np.concatenate([norm_pose_coords, visibility], axis=-1)
         
-        # 2. Hand Normalization (Wrist-relative)
+        # 2. Hand Normalization (Wrist-relative & body-scale normalized)
         left_wrist = np.expand_dims(left_hand[:, 0, :], axis=1)  # (num_frames, 1, 3)
-        norm_left_hand = left_hand - left_wrist
+        norm_left_hand = (left_hand - left_wrist) / shoulder_width
         
         right_wrist = np.expand_dims(right_hand[:, 0, :], axis=1)  # (num_frames, 1, 3)
-        norm_right_hand = right_hand - right_wrist
+        norm_right_hand = (right_hand - right_wrist) / shoulder_width
         
-        # 3. Face Normalization (Centroid-relative)
+        # 3. Face Normalization (Centroid-relative & body-scale normalized)
         face_centroid = np.mean(face, axis=1, keepdims=True)  # (num_frames, 1, 3)
-        norm_face = face - face_centroid
+        norm_face = (face - face_centroid) / shoulder_width
         
         return norm_pose, norm_left_hand, norm_right_hand, norm_face
 
@@ -84,10 +86,12 @@ class ASLLandmarkDataset(Dataset):
             # Return dummy zero tensors if load fails
             raise IOError(f"Failed to load landmark file {file_path}: {e}")
 
+        num_frames = pose.shape[0]
+        if num_frames == 0:
+            raise ValueError(f"Landmark file {file_path} contains 0 frames. Corrupt sequence.")
+
         if self.normalize:
             pose, left_hand, right_hand, face = self._normalize_landmarks(pose, left_hand, right_hand, face)
-
-        num_frames = pose.shape[0]
         
         # Flatten landmark dimensions per frame
         # Pose: (N, 132), Hands: (N, 63) each

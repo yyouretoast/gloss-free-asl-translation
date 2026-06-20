@@ -65,7 +65,7 @@ class ConformerConvModule(nn.Module):
             padding=padding, groups=d_model
         )
         
-        self.batch_norm = nn.BatchNorm1d(d_model)
+        self.conv_norm = nn.LayerNorm(d_model)
         self.act = Swish()
         
         # 1x1 Pointwise Conv to project back to d_model
@@ -83,7 +83,12 @@ class ConformerConvModule(nn.Module):
         x = self.pointwise_conv1(x)
         x = self.glu(x)
         x = self.depthwise_conv(x)
-        x = self.batch_norm(x)
+        
+        # Transpose to (batch, seq_len, d_model) for LayerNorm to avoid padding bias
+        x = x.transpose(1, 2)
+        x = self.conv_norm(x)
+        x = x.transpose(1, 2)
+        
         x = self.act(x)
         x = self.pointwise_conv2(x)
         x = self.dropout(x)
@@ -178,9 +183,15 @@ class ConformerEncoder(nn.Module):
             for _ in range(num_layers // 2)
         ])
         
-        # 3. Temporal Pyramidal Downsampling (1D MaxPool or strided Conv1d)
+        # 3. Temporal Pyramidal Downsampling (1D learnable Conv1d replacing MaxPool1d)
         # Downsamples the sequence length by 2
-        self.downsample = nn.MaxPool1d(kernel_size=2, stride=2, ceil_mode=True)
+        self.downsample = nn.Conv1d(
+            in_channels=d_model, 
+            out_channels=d_model, 
+            kernel_size=3, 
+            stride=2, 
+            padding=1
+        )
         
         # 4. Conformer Blocks (after downsampling)
         self.second_half = nn.ModuleList([
