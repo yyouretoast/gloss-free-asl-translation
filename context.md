@@ -91,7 +91,7 @@ MediaPipe Holistic Keypoints
 ---
 
 ## Evaluation
-- Held-out-signer eval: Group splits strictly by Signer ID (ensuring validation/test signers are never seen during training). If metadata is missing or incomplete, fallback to standard stratified splits.
+- Held-out-signer eval: Group splits strictly by Signer ID (ensuring validation/test signers are never seen during training). If metadata is missing or incomplete, fallback to grouping by visual similarity/background cues to partition signers, avoiding standard random video splits to prevent data leakage.
 - Metrics: Report BLEU-4 and Word Error Rate (WER) to capture semantic and syntactic quality.
 - Error Analysis: Catalog failures across visual categories (e.g. occlusion, speed, fingerspelling).
 
@@ -101,7 +101,7 @@ MediaPipe Holistic Keypoints
 | :--- | :--- |
 | **Landmark Extraction** | >95% of target clips processed successfully |
 | **Data Validation** | Real-world coordinates profile documented and truncation limits set |
-| **End-to-End Model** | Training runs without memory/instability crashes; model maps coordinates to coherent sentences |
+| **End-to-End Model** | Training runs without memory/instability crashes; model maps coordinates to coherent words/fragments showing translation signal |
 | **Evaluation** | Model achieves better-than-trivial BLEU-4 and WER on validation splits |
 
 ---
@@ -120,4 +120,4 @@ MediaPipe Holistic Keypoints
 - Sign2GPT (Wong, Camgöz, Bowden, arXiv 2024) — gloss-free SLT precedent
 - Sign Language Transformers (Camgoz, Koller, Hadfield, Bowden, CVPR 2020) — optional future enhancement, needs gloss data not currently used
 - How2Sign (Duarte et al., CVPR 2021) — eval benchmark
-- WLASL — manual-stream pretraining only
+- WLASL — manual-stream pretraining (scoped out for MVP, planned post-MVP)

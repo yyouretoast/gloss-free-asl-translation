@@ -24,7 +24,7 @@ We are building a landmark-based, gloss-free ASL translation system that transla
 | :--- | :--- |
 | **Landmark Extraction** | >95% of target clips processed successfully |
 | **Data Validation** | Real-world coordinates profile documented and truncation limits set |
-| **End-to-End Model** | Training runs without memory/instability crashes; model maps coordinates to coherent sentences |
+| **End-to-End Model** | Training runs without memory/instability crashes; model maps coordinates to coherent words/fragments showing translation signal |
 | **Evaluation** | Model achieves better-than-trivial BLEU-4 and WER on validation splits |
 
 ---
@@ -124,7 +124,7 @@ We executed our dry run epoch locally on CPU using the mock landmark dataset:
 ---
 
 ## 6. Next Planned Step (Phase 5)
-We have completed all local implementation, verification, debugging, and feature enhancements. 
+We have completed all local pipeline verification, debugging, and baseline diagnostic tests. 
 The next steps are:
 1. **Push Code to GitHub**: Add remote repository URL and push codebase.
 2. **Execute Kaggle Training**: Mount dataset in Kaggle GPU notebook, run verification scans, and trigger multi-epoch model training.
