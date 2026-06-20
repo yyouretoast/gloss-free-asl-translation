@@ -34,13 +34,20 @@ class ASLLandmarkDataset(Dataset):
             self.filepaths = glob.glob(os.path.join(data_dir, "*.npz"))
             # If no .npz files are found, dynamically resolve OpenPose JSON folders
             if len(self.filepaths) == 0:
-                # Search for directories that contain json keypoint files
-                json_dirs = glob.glob(os.path.join(data_dir, "**/openpose_output/json/*"), recursive=True)
-                self.filepaths = [d for d in json_dirs if os.path.isdir(d)]
-                
-                # If still empty, scan directories inside data_dir itself
-                if len(self.filepaths) == 0:
-                    self.filepaths = [os.path.join(data_dir, d) for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
+                candidates = [
+                    data_dir,
+                    os.path.join(data_dir, "train_2D_keypoints/openpose_output/json"),
+                    os.path.join(data_dir, "openpose_output/json")
+                ]
+                for cand in candidates:
+                    if os.path.exists(cand):
+                        subdirs = [os.path.join(cand, d) for d in os.listdir(cand) if os.path.isdir(os.path.join(cand, d))]
+                        if subdirs:
+                            # Quick check if the first folder contains json files to confirm it's OpenPose structure
+                            first_sub = subdirs[0]
+                            if glob.glob(os.path.join(first_sub, "*.json")):
+                                self.filepaths = subdirs
+                                break
 
     def __len__(self):
         return len(self.filepaths)

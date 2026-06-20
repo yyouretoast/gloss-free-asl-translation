@@ -134,12 +134,20 @@ def validate_dataset(directory_path, limit=50):
     
     # If no .npz files, try finding directories of JSONs (OpenPose structure)
     if not files:
-        json_dirs = glob.glob(os.path.join(directory_path, "**/openpose_output/json/*"), recursive=True)
-        files = [d for d in json_dirs if os.path.isdir(d)]
-        
-        # Fallback to directories directly inside directory_path
-        if not files and os.path.exists(directory_path):
-            files = [os.path.join(directory_path, d) for d in os.listdir(directory_path) if os.path.isdir(os.path.join(directory_path, d))]
+        candidates = [
+            directory_path,
+            os.path.join(directory_path, "train_2D_keypoints/openpose_output/json"),
+            os.path.join(directory_path, "openpose_output/json")
+        ]
+        for cand in candidates:
+            if os.path.exists(cand):
+                subdirs = [os.path.join(cand, d) for d in os.listdir(cand) if os.path.isdir(os.path.join(cand, d))]
+                if subdirs:
+                    # Quick check if the first folder contains json files to confirm it's OpenPose structure
+                    first_sub = subdirs[0]
+                    if glob.glob(os.path.join(first_sub, "*.json")):
+                        files = subdirs
+                        break
             
     if not files:
         print(f"No coordinate files (.npz) or OpenPose directories found in {directory_path}")
