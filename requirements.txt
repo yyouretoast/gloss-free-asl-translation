@@ -10,3 +10,5 @@ jiwer
 sacrebleu
 sentencepiece
 protobuf
+onnx
+onnxscript
