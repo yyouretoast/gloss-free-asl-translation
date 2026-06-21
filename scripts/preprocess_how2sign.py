@@ -1,6 +1,9 @@
 import os
 import glob
-import json
+try:
+    import ujson as json
+except ImportError:
+    import json
 import numpy as np
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
@@ -12,7 +15,7 @@ def process_single_folder(args_tuple):
         basename = os.path.basename(input_folder)
         output_filepath = os.path.join(output_dir, f"{basename}.npz")
         
-        json_files = sorted(glob.glob(os.path.join(input_folder, "*.json")))
+        json_files = sorted([os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith('.json')])
         num_frames = len(json_files)
         if num_frames == 0:
             return False
