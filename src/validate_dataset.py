@@ -21,10 +21,17 @@ def analyze_single_file(file_path):
                 people = data.get('people', [])
                 if people:
                     p = people[0]
-                    pose_arr = np.array(p.get('pose_keypoints_2d', [])).reshape(25, 3)
-                    face_arr = np.array(p.get('face_keypoints_2d', [])).reshape(70, 3)
-                    lh_arr = np.array(p.get('hand_left_keypoints_2d', [])).reshape(21, 3)
-                    rh_arr = np.array(p.get('hand_right_keypoints_2d', [])).reshape(21, 3)
+                    pose_raw = p.get('pose_keypoints_2d', [])
+                    pose_arr = np.array(pose_raw).reshape(25, 3) if len(pose_raw) == 75 else np.zeros((25, 3))
+                    
+                    face_raw = p.get('face_keypoints_2d', [])
+                    face_arr = np.array(face_raw).reshape(70, 3) if len(face_raw) == 210 else np.zeros((70, 3))
+                    
+                    lh_raw = p.get('hand_left_keypoints_2d', [])
+                    lh_arr = np.array(lh_raw).reshape(21, 3) if len(lh_raw) == 63 else np.zeros((21, 3))
+                    
+                    rh_raw = p.get('hand_right_keypoints_2d', [])
+                    rh_arr = np.array(rh_raw).reshape(21, 3) if len(rh_raw) == 63 else np.zeros((21, 3))
                 else:
                     pose_arr = np.zeros((25, 3))
                     face_arr = np.zeros((70, 3))

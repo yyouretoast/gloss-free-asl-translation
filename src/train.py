@@ -235,6 +235,19 @@ def main():
                 
         # Drop unknown-signer files from validation/evaluation entirely to prevent leakage
         train_files.extend(unknown_files)
+        
+        # Safeguard: if there is only 1 signer or val_files is empty, split train_files to populate it
+        if len(val_files) == 0 and len(train_files) > 1:
+            print("\nWARNING: Signer-based split left validation set empty. Splitting train files 80/20 to populate validation.")
+            import random
+            # Use deterministic seed for reproducibility
+            rng = random.Random(42)
+            shuffled_train = list(train_files)
+            rng.shuffle(shuffled_train)
+            split_idx = int(0.8 * len(shuffled_train))
+            train_files = shuffled_train[:split_idx]
+            val_files = shuffled_train[split_idx:]
+            
         print(f"Signer splits: {len(train_files)} train (includes {len(unknown_files)} unknown-signer clips), {len(val_files)} validation files.")
     else:
         # Fallback to standard random split if no signer proxy info is available
