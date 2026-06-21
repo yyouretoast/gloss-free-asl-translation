@@ -9,3 +9,4 @@ results/
 *.safetensors
 *.log
 *.md
+!README.md
