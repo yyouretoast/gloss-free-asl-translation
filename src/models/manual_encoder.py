@@ -53,10 +53,13 @@ class ConformerConvModule(nn.Module):
         self.pointwise_conv2 = nn.Conv1d(d_model, d_model, kernel_size=1)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
+    def forward(self, x, key_padding_mask=None):
         # x shape: (batch, seq_len, d_model)
         residual = x
         x = self.ln(x)
+        
+        if key_padding_mask is not None:
+            x = x.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
         
         # Transpose for Conv1d: (batch, d_model, seq_len)
         x = x.transpose(1, 2)
@@ -68,6 +71,10 @@ class ConformerConvModule(nn.Module):
         # Transpose to (batch, seq_len, d_model) for LayerNorm to avoid padding bias
         x = x.transpose(1, 2)
         x = self.conv_norm(x)
+        
+        if key_padding_mask is not None:
+            x = x.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
+            
         x = x.transpose(1, 2)
         
         x = self.act(x)
@@ -76,6 +83,10 @@ class ConformerConvModule(nn.Module):
         
         # Transpose back: (batch, seq_len, d_model)
         x = x.transpose(1, 2)
+        
+        if key_padding_mask is not None:
+            x = x.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
+            
         return residual + x
 
 class ConformerAttentionModule(nn.Module):
@@ -92,6 +103,14 @@ class ConformerAttentionModule(nn.Module):
         # x shape: (batch, seq_len, d_model)
         residual = x
         x = self.ln(x)
+        
+        # Prevent NaN when a sequence is completely padded.
+        # If all elements in a row are True, set the first element to False.
+        if key_padding_mask is not None:
+            all_padded = key_padding_mask.all(dim=-1, keepdim=True)
+            first_element_mask = torch.zeros_like(key_padding_mask)
+            first_element_mask[:, 0] = True
+            key_padding_mask = key_padding_mask & ~(all_padded & first_element_mask)
         
         # PyTorch MultiheadAttention expects batch_first=True
         # key_padding_mask should be shape (batch, seq_len) containing True for padded values
@@ -114,10 +133,22 @@ class ConformerBlock(nn.Module):
     def forward(self, x, key_padding_mask=None):
         # Macaron-style sandwich structure
         x = self.ffn1(x)
+        if key_padding_mask is not None:
+            x = x.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
+            
         x = self.attn(x, key_padding_mask=key_padding_mask)
-        x = self.conv(x)
+        if key_padding_mask is not None:
+            x = x.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
+            
+        x = self.conv(x, key_padding_mask=key_padding_mask)
+        if key_padding_mask is not None:
+            x = x.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
+            
         x = self.ffn2(x)
         x = self.final_ln(x)
+        if key_padding_mask is not None:
+            x = x.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
+            
         return x
 
 class PositionalEncoding(nn.Module):
@@ -130,8 +161,12 @@ class PositionalEncoding(nn.Module):
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
+        # Ensure correct shapes in case d_model is odd
+        sin_term = torch.sin(position * div_term)
+        cos_term = torch.cos(position * div_term)
+        
+        pe[:, 0::2] = sin_term[:, :pe[:, 0::2].size(1)]
+        pe[:, 1::2] = cos_term[:, :pe[:, 1::2].size(1)]
         
         # Register as buffer so it moves with the model device
         self.register_buffer('pe', pe.unsqueeze(0))
@@ -186,15 +221,20 @@ class ConformerEncoder(nn.Module):
             x (Tensor): Landmark features of shape (batch, seq_len, input_dim).
             attention_mask (Tensor): Mask of shape (batch, seq_len) with 1 for real frames, 0 for pad.
         """
+        # Guard against completely empty sequence length input
+        if x.size(1) == 0:
+            raise ValueError(f"Input feature sequence has length 0. Batch size: {x.size(0)}")
+            
         # Feature projection
         x = self.projection(x)
         x = self.pos_encoding(x)
         x = self.dropout(x)
         
         # Convert attention_mask (1 for valid, 0 for pad) to PyTorch key_padding_mask (True for pad, False for valid)
+        # Using < 0.5 is more robust across FP16/BF16 than == 0
         key_padding_mask = None
         if attention_mask is not None:
-            key_padding_mask = (attention_mask == 0)
+            key_padding_mask = (attention_mask < 0.5)
             
         # First half of blocks
         for block in self.first_half:
@@ -211,8 +251,12 @@ class ConformerEncoder(nn.Module):
         if key_padding_mask is not None:
             # Slices every 2nd index along seq_len to match Conv1d stride=2
             downsampled_mask = key_padding_mask[:, ::2]
-            # Ensure sequence length alignment (handles stride boundary)
-            if downsampled_mask.size(1) != x.size(1):
+            # Robustly align sequence lengths using concatenation/padding or truncation
+            if downsampled_mask.size(1) < x.size(1):
+                diff = x.size(1) - downsampled_mask.size(1)
+                padding_tensor = torch.ones((downsampled_mask.size(0), diff), dtype=torch.bool, device=downsampled_mask.device)
+                downsampled_mask = torch.cat([downsampled_mask, padding_tensor], dim=1)
+            elif downsampled_mask.size(1) > x.size(1):
                 downsampled_mask = downsampled_mask[:, :x.size(1)]
                 
         # Second half of blocks

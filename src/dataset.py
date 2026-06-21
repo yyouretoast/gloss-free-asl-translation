@@ -49,6 +49,10 @@ class ASLLandmarkDataset(Dataset):
                             if glob.glob(os.path.join(first_sub, "*.json")):
                                 self.filepaths = subdirs
                                 break
+        
+        if len(self.filepaths) == 0:
+            import warnings
+            warnings.warn(f"No landmark files (.npz) or OpenPose folders found in '{data_dir}'.")
 
     def __len__(self):
         return len(self.filepaths)
@@ -237,6 +241,12 @@ class CollateLandmarks:
         attention_mask = torch.zeros(len(batch), max_seq_len, dtype=torch.float32)
         
         for i, f in enumerate(features):
+            # Check for feature dimension mismatch in batch
+            if f.shape[1] != feature_dim:
+                raise ValueError(
+                    f"Feature dimension mismatch in batch! First item has dim {feature_dim}, "
+                    f"but item at index {i} has dim {f.shape[1]}."
+                )
             seq_len = len(f)
             padded_features[i, :seq_len] = f
             attention_mask[i, :seq_len] = 1.0  # 1 for valid frames, 0 for pad

@@ -118,9 +118,14 @@ def analyze_single_file(file_path):
         left_deltas = np.linalg.norm(np.diff(left_wrists, axis=0), axis=1)
         right_deltas = np.linalg.norm(np.diff(right_wrists, axis=0), axis=1)
         
-        # Average delta across frames that have valid movement (avoiding zero transitions if tracking dropped)
-        valid_left = left_deltas[~left_hand_missing[:-1]]
-        valid_right = right_deltas[~right_hand_missing[:-1]]
+        # Average delta across frames that have valid movement.
+        # We only compute deltas when BOTH the current and the next frame are not missing.
+        # This prevents distorting the noise calculation with huge jumps to/from zero coordinates.
+        valid_left_mask = (~left_hand_missing[:-1]) & (~left_hand_missing[1:])
+        valid_right_mask = (~right_hand_missing[:-1]) & (~right_hand_missing[1:])
+        
+        valid_left = left_deltas[valid_left_mask]
+        valid_right = right_deltas[valid_right_mask]
         
         all_deltas = []
         if len(valid_left) > 0:

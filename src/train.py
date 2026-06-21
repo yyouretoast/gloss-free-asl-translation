@@ -96,7 +96,13 @@ class ASLTranslationModel(nn.Module):
         a RuntimeError about shared memory tensors (like T5 embed_tokens/shared weights).
         """
         sd = super().state_dict(*args, destination=destination, prefix=prefix, keep_vars=keep_vars)
-        return OrderedDict((k, v.clone()) for k, v in sd.items())
+        # Clone to prevent shared parameter issues in safetensors
+        cloned_sd = OrderedDict((k, v.clone()) for k, v in sd.items())
+        if destination is not None:
+            destination.clear()
+            destination.update(cloned_sd)
+            return destination
+        return cloned_sd
 
 def main():
     import argparse
@@ -254,14 +260,16 @@ def main():
     
     if len(sorted_signers) > 0:
         total_known_count = sum(len(signer_groups[s]) for s in sorted_signers)
-        target_train_count = 0.8 * total_known_count
-        current_train_count = 0
         
-        for signer in sorted_signers:
+        # Sort signers by dataset size descending to make the split more balanced
+        sorted_signers_by_size = sorted(sorted_signers, key=lambda s: len(signer_groups[s]), reverse=True)
+        
+        for signer in sorted_signers_by_size:
             files = signer_groups[signer]
-            if current_train_count < target_train_count:
+            # Greedily allocate signers to train/val to keep ratios close to 80/20,
+            # ensuring validation doesn't end up empty or heavily starved.
+            if len(train_files) == 0 or (len(train_files) + len(files)) / total_known_count <= 0.85:
                 train_files.extend(files)
-                current_train_count += len(files)
             else:
                 val_files.extend(files)
                 
