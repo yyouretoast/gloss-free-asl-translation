@@ -12,10 +12,6 @@ def process_single_folder(args_tuple):
         basename = os.path.basename(input_folder)
         output_filepath = os.path.join(output_dir, f"{basename}.npz")
         
-        # Skip if already preprocessed
-        if os.path.exists(output_filepath):
-            return True
-            
         json_files = sorted(glob.glob(os.path.join(input_folder, "*.json")))
         num_frames = len(json_files)
         if num_frames == 0:
@@ -84,14 +80,22 @@ def main():
         print(f"Error: Candidate OpenPose json folder {json_cand} does not exist!")
         sys.exit(1)
         
-    # 2. Resolve output directory in working directory
-    output_dir = "/kaggle/working/how2sign_npz"
+    # 2. Resolve output directory (default to /tmp/how2sign_npz for fast SSD writes on Kaggle)
+    output_dir = "/tmp/how2sign_npz"
+    if len(sys.argv) > 1:
+        output_dir = sys.argv[1]
     os.makedirs(output_dir, exist_ok=True)
     
     # 3. List folders to process
     print("Scanning OpenPose directories...")
-    folders = [os.path.join(json_cand, d) for d in os.listdir(json_cand) if os.path.isdir(os.path.join(json_cand, d))]
-    print(f"Found {len(folders)} folders to process.")
+    all_folders = [os.path.join(json_cand, d) for d in os.listdir(json_cand) if os.path.isdir(os.path.join(json_cand, d))]
+    
+    # Get set of already processed files
+    existing_files = {os.path.splitext(f)[0] for f in os.listdir(output_dir) if f.endswith('.npz')}
+    
+    # Filter out already processed folders
+    folders = [f for f in all_folders if os.path.basename(f) not in existing_files]
+    print(f"Found {len(all_folders)} folders. {len(folders)} folders remaining to process.")
     
     # Prepare arguments for pool
     tasks = [(f, output_dir) for f in folders]
