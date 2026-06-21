@@ -159,20 +159,28 @@ def main():
         # Detect appropriate identifier and label columns dynamically
         file_candidates = [c for c in df.columns if any(x in c.lower() for x in ['id', 'file', 'video', 'key', 'name'])]
         
-        # Sort candidates to prefer segment/sentence/file specific IDs over video ID
+        # Sort candidates to prefer segment/sentence/file specific names/IDs
         def file_col_priority(col):
             c_low = col.lower()
-            if 'sentence' in c_low and 'id' in c_low:
+            if 'sentence' in c_low and 'name' in c_low:
                 return 0
-            if 'segment' in c_low and 'id' in c_low:
+            if 'segment' in c_low and 'name' in c_low:
                 return 1
-            if 'file' in c_low and 'id' in c_low:
+            if 'file' in c_low and 'name' in c_low:
                 return 2
-            if 'id' in c_low and 'video' not in c_low:
+            if 'sentence' in c_low and 'id' in c_low:
                 return 3
-            if 'video' in c_low:
+            if 'segment' in c_low and 'id' in c_low:
                 return 4
-            return 5
+            if 'file' in c_low and 'id' in c_low:
+                return 5
+            if 'name' in c_low and 'video' not in c_low:
+                return 6
+            if 'id' in c_low and 'video' not in c_low:
+                return 7
+            if 'video' in c_low:
+                return 8
+            return 9
             
         file_candidates.sort(key=file_col_priority)
         file_col = file_candidates
