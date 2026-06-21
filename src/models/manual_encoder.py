@@ -2,25 +2,6 @@ import torch
 import torch.nn as nn
 import math
 
-class Swish(nn.Module):
-    """
-    Swish activation function (SiLU in PyTorch).
-    """
-    def forward(self, x):
-        return x * torch.sigmoid(x)
-
-class GLU(nn.Module):
-    """
-    Gated Linear Unit activation along the channel/feature dimension.
-    """
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
-
-    def forward(self, x):
-        outputs, gate = x.chunk(2, dim=self.dim)
-        return outputs * torch.sigmoid(gate)
-
 class FeedForwardModule(nn.Module):
     """
     Feed Forward Module (FFN) with half-step residual connection (Macaron style).
@@ -29,7 +10,7 @@ class FeedForwardModule(nn.Module):
         super().__init__()
         self.ln = nn.LayerNorm(d_model)
         self.w_1 = nn.Linear(d_model, d_model * expansion_factor)
-        self.act = Swish()
+        self.act = nn.SiLU()
         self.w_2 = nn.Linear(d_model * expansion_factor, d_model)
         self.dropout = nn.Dropout(dropout)
 
@@ -56,7 +37,7 @@ class ConformerConvModule(nn.Module):
         
         # 1x1 Pointwise Conv to project to 2 * d_model (for GLU)
         self.pointwise_conv1 = nn.Conv1d(d_model, 2 * d_model, kernel_size=1)
-        self.glu = GLU(dim=1)
+        self.glu = nn.GLU(dim=1)
         
         # Depthwise Conv1d (groups = d_model)
         padding = (kernel_size - 1) // 2
@@ -66,7 +47,7 @@ class ConformerConvModule(nn.Module):
         )
         
         self.conv_norm = nn.LayerNorm(d_model)
-        self.act = Swish()
+        self.act = nn.SiLU()
         
         # 1x1 Pointwise Conv to project back to d_model
         self.pointwise_conv2 = nn.Conv1d(d_model, d_model, kernel_size=1)
