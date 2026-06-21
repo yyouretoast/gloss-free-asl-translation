@@ -156,8 +156,29 @@ def main():
                 df = pd.read_csv(args.metadata_file, sep=sep)
             
         # Detect appropriate identifier and label columns dynamically
-        file_col = [c for c in df.columns if any(x in c.lower() for x in ['id', 'file', 'video', 'key', 'name'])]
-        text_col = [c for c in df.columns if any(x in c.lower() for x in ['text', 'trans', 'gloss', 'sentence', 'caption'])]
+        file_candidates = [c for c in df.columns if any(x in c.lower() for x in ['id', 'file', 'video', 'key', 'name'])]
+        
+        # Sort candidates to prefer segment/sentence/file specific IDs over video ID
+        def file_col_priority(col):
+            c_low = col.lower()
+            if 'sentence' in c_low and 'id' in c_low:
+                return 0
+            if 'segment' in c_low and 'id' in c_low:
+                return 1
+            if 'file' in c_low and 'id' in c_low:
+                return 2
+            if 'id' in c_low and 'video' not in c_low:
+                return 3
+            if 'video' in c_low:
+                return 4
+            return 5
+            
+        file_candidates.sort(key=file_col_priority)
+        file_col = file_candidates
+        
+        # Target/Text column: matches text, trans, gloss, sentence, caption, but NOT key/id/file/video words
+        text_col = [c for c in df.columns if any(x in c.lower() for x in ['text', 'trans', 'gloss', 'sentence', 'caption'])
+                    and not any(x in c.lower() for x in ['id', 'key', 'file', 'video'])]
         signer_col = [c for c in df.columns if any(x in c.lower() for x in ['signer', 'channel', 'uploader', 'author', 'subject'])]
         
         if file_col and text_col:

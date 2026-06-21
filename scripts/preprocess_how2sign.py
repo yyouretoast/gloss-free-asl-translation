@@ -1,0 +1,113 @@
+import os
+import glob
+import json
+import numpy as np
+from multiprocessing import Pool, cpu_count
+from tqdm import tqdm
+import sys
+
+def process_single_folder(args_tuple):
+    input_folder, output_dir = args_tuple
+    try:
+        basename = os.path.basename(input_folder)
+        output_filepath = os.path.join(output_dir, f"{basename}.npz")
+        
+        # Skip if already preprocessed
+        if os.path.exists(output_filepath):
+            return True
+            
+        json_files = sorted(glob.glob(os.path.join(input_folder, "*.json")))
+        num_frames = len(json_files)
+        if num_frames == 0:
+            return False
+            
+        pose_list, left_hand_list, right_hand_list, face_list = [], [], [], []
+        
+        for jf in json_files:
+            with open(jf, 'r') as f:
+                data = json.load(f)
+            
+            people = data.get('people', [])
+            if people:
+                p = people[0]
+                pose_raw = p.get('pose_keypoints_2d', [])
+                pose_arr = np.array(pose_raw).reshape(25, 3) if len(pose_raw) == 75 else np.zeros((25, 3))
+                
+                face_raw = p.get('face_keypoints_2d', [])
+                face_arr = np.array(face_raw).reshape(70, 3) if len(face_raw) == 210 else np.zeros((70, 3))
+                
+                lh_raw = p.get('hand_left_keypoints_2d', [])
+                lh_arr = np.array(lh_raw).reshape(21, 3) if len(lh_raw) == 63 else np.zeros((21, 3))
+                
+                rh_raw = p.get('hand_right_keypoints_2d', [])
+                rh_arr = np.array(rh_raw).reshape(21, 3) if len(rh_raw) == 63 else np.zeros((21, 3))
+            else:
+                pose_arr = np.zeros((25, 3))
+                face_arr = np.zeros((70, 3))
+                lh_arr = np.zeros((21, 3))
+                rh_arr = np.zeros((21, 3))
+                
+            pose_list.append(pose_arr)
+            face_list.append(face_arr)
+            left_hand_list.append(lh_arr)
+            right_hand_list.append(rh_arr)
+            
+        pose = np.stack(pose_list, axis=0)
+        left_hand = np.stack(left_hand_list, axis=0)
+        right_hand = np.stack(right_hand_list, axis=0)
+        face = np.stack(face_list, axis=0)
+        
+        # Save as compressed npz
+        np.savez_compressed(output_filepath, pose=pose, left_hand=left_hand, right_hand=right_hand, face=face)
+        return True
+    except Exception as e:
+        print(f"Error processing {input_folder}: {e}")
+        return False
+
+def main():
+    # 1. Resolve input directory
+    input_dir = None
+    for path in [
+        '/kaggle/input/datasets/nazarboholii/how2sign',
+        '/kaggle/input/how2sign',
+        '/kaggle/input/how2sign-keypoints',
+        '/kaggle/input/datasets/nazarboholii/how2sign-keypoints'
+    ]:
+        if os.path.exists(path):
+            input_dir = path
+            break
+    else:
+        input_dir = '/kaggle/input/datasets/nazarboholii/how2sign'
+        
+    json_cand = os.path.join(input_dir, "train_2D_keypoints/openpose_output/json")
+    if not os.path.exists(json_cand):
+        print(f"Error: Candidate OpenPose json folder {json_cand} does not exist!")
+        sys.exit(1)
+        
+    # 2. Resolve output directory in working directory
+    output_dir = "/kaggle/working/how2sign_npz"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 3. List folders to process
+    print("Scanning OpenPose directories...")
+    folders = [os.path.join(json_cand, d) for d in os.listdir(json_cand) if os.path.isdir(os.path.join(json_cand, d))]
+    print(f"Found {len(folders)} folders to process.")
+    
+    # Prepare arguments for pool
+    tasks = [(f, output_dir) for f in folders]
+    
+    # 4. Process in parallel using a CPU pool
+    num_workers = min(cpu_count(), 4)
+    print(f"Processing in parallel using {num_workers} CPU workers...")
+    
+    success_count = 0
+    with Pool(num_workers) as pool:
+        for result in tqdm(pool.imap_unordered(process_single_folder, tasks), total=len(tasks)):
+            if result:
+                success_count += 1
+                
+    print(f"\nPreprocessing completed! Successfully converted {success_count}/{len(folders)} videos to .npz.")
+    print(f"Preprocessed dataset saved at: {output_dir}")
+
+if __name__ == "__main__":
+    main()
