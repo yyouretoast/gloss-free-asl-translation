@@ -79,8 +79,7 @@ def main():
     if downsampled_mask is not None:
         print(f"Downsampled mask shape: {downsampled_mask.shape}")
         
-    # Verify outputs
-    # Sequence length is pooled by 2 due to MaxPool1d temporal downsampling
+    # Sequence length is downsampled by 2 due to Conv1d temporal downsampling
     expected_seq_len = (input_features.shape[1] + 1) // 2
     assert outputs.shape == (2, expected_seq_len, 512), f"Output shape mismatch: {outputs.shape}"
     assert not torch.isnan(outputs).any(), "Found NaN values in encoder outputs!"

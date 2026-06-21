@@ -57,11 +57,19 @@ If using pre-extracted `.npz` files, each file contains the following compressed
 * **`face`**: Shape `(num_frames, 92, 3)` representing $(x, y, z)$.
 
 ### 2. Feature Dimension Breakdown
-The feature vectors are concatenated per frame into a single 1D tensor:
+The feature vectors are concatenated per frame into a single 1D tensor depending on the dataset source format:
+
+#### A. MediaPipe Holistic Format (e.g. YouTube-ASL)
 * **Face Enabled (Default)**: **534 dimensions**
   $$\text{Pose (} 33 \times 4 = 132\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} + \text{Face (} 92 \times 3 = 276\text{)} = 534\text{ dims}$$
 * **Face Disabled (`--no_face`)**: **258 dimensions**
   $$\text{Pose (} 33 \times 4 = 132\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} = 258\text{ dims}$$
+
+#### B. OpenPose BODY_25 Format (e.g. How2Sign)
+* **Face Enabled (Default)**: **411 dimensions**
+  $$\text{Pose (} 25 \times 3 = 75\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} + \text{Face (} 70 \times 3 = 210\text{)} = 411\text{ dims}$$
+* **Face Disabled (`--no_face`)**: **201 dimensions**
+  $$\text{Pose (} 25 \times 3 = 75\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} = 201\text{ dims}$$
 
 ---
 
@@ -105,7 +113,8 @@ The translation model is evaluated at the end of each training epoch using two p
 │   ├── test_mediapipe.py  # MediaPipe installation check
 │   ├── test_model.py      # End-to-end forward/backward shape check script
 │   ├── test_pipeline.py   # Synthesized pipeline simulator
-│   └── profile_memory.py  # GPU memory estimator for small/base T5 decoders
+│   ├── profile_memory.py  # GPU memory estimator for small/base T5 decoders
+│   └── export_onnx.py     # Conformer encoder ONNX export utility
 ├── src/                   # Main source code
 │   ├── __init__.py
 │   ├── data_pipeline.py   # MediaPipe extractor and formatter
@@ -145,6 +154,14 @@ python scripts/test_model.py
 Run a local dry-run training pass (executes 1 epoch on mock data):
 ```bash
 python -m src.train --epochs 1 --batch_size 2
+```
+Export Conformer Encoder to ONNX:
+```bash
+# Default (534 dimensions for MediaPipe format)
+python scripts/export_onnx.py
+
+# Specify dimensions (e.g., 411 dimensions for How2Sign OpenPose format)
+python scripts/export_onnx.py 411
 ```
 
 ---

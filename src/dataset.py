@@ -18,8 +18,9 @@ class ASLLandmarkDataset(Dataset):
                                   to their English translation text.
             file_list (list): Optional list of specific file paths. If None, scans data_dir.
             max_len (int): Maximum frame sequence length. Longer sequences are truncated.
-            include_face (bool): If True, concatenates face expression landmarks (276 dims)
-                                 with manual landmarks (258 dims) for 534 dims total.
+            include_face (bool): If True, concatenates face expression landmarks (276 dims for MediaPipe, 
+                                 210 dims for OpenPose) with manual landmarks (258 dims for MediaPipe, 
+                                 201 dims for OpenPose) for a total of 534 or 411 dims respectively.
             normalize (bool): If True, applies frame-level geometric normalization.
         """
         self.data_dir = data_dir
@@ -183,13 +184,13 @@ class ASLLandmarkDataset(Dataset):
         left_hand_flat = left_hand.reshape(num_frames, -1)
         right_hand_flat = right_hand.reshape(num_frames, -1)
         
-        # Combine manual features: shape (num_frames, 258)
+        # Combine manual features: shape (num_frames, 258) for MediaPipe or (num_frames, 201) for OpenPose
         manual_feats = np.concatenate([pose_flat, left_hand_flat, right_hand_flat], axis=1)
         
         if self.include_face:
             # Face: (N, 276)
             face_flat = face.reshape(num_frames, -1)
-            # Combine manual + face: shape (num_frames, 534)
+            # Combine manual + face: shape (num_frames, 534) for MediaPipe or (num_frames, 411) for OpenPose
             features = np.concatenate([manual_feats, face_flat], axis=1)
         else:
             features = manual_feats

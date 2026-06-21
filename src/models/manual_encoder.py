@@ -201,7 +201,7 @@ class ConformerEncoder(nn.Module):
             x = block(x, key_padding_mask=key_padding_mask)
             
         # Pyramidal Temporal Downsampling
-        # MaxPool1d expects shape: (batch, channels, seq_len)
+        # Conv1d expects shape: (batch, channels, seq_len)
         x = x.transpose(1, 2)
         x = self.downsample(x)
         x = x.transpose(1, 2)
@@ -209,9 +209,9 @@ class ConformerEncoder(nn.Module):
         # Downsample the attention mask/padding mask as well
         downsampled_mask = None
         if key_padding_mask is not None:
-            # Slices every 2nd index along seq_len to match MaxPool stride=2
+            # Slices every 2nd index along seq_len to match Conv1d stride=2
             downsampled_mask = key_padding_mask[:, ::2]
-            # Ensure sequence length alignment (handles ceil mode boundary)
+            # Ensure sequence length alignment (handles stride boundary)
             if downsampled_mask.size(1) != x.size(1):
                 downsampled_mask = downsampled_mask[:, :x.size(1)]
                 
