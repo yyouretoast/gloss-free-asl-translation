@@ -8,7 +8,7 @@ A deep learning framework to translate American Sign Language (ASL) video coordi
 
 ### 1. Robust Coordinates Processing Pipeline
 * **Targeted Landmark Extraction (`src/data_pipeline.py`)**: Uses MediaPipe to extract keypoints across Pose, Face, and Hands. Slices face landmarks to a optimized **92-point facial subset** (eyebrows, eyes, lips) instead of the full 468 points, reducing coordinate dimensionality by **80%** (from 1404 to 276 dimensions) while preserving critical grammatical facial expressions.
-* **Scale & Distance Invariance (`src/dataset.py`)**: Centers coordinate frames around the mid-shoulder point and scales landmarks based on shoulder width. This ensures model invariance to camera distance, signer height, and camera movement.
+* **Scale & Distance Invariance (`src/dataset.py`)**: Coordinates are geometrically normalized to ensure model invariance to camera distance, signer height, and camera movement.
 * **How2Sign & OpenPose Support (`src/dataset.py`)**: Custom parser to dynamically load OpenPose JSON outputs frame-by-frame. Auto-aligns keypoint layouts (e.g. mapping BODY_25 shoulders vs. MediaPipe landmarks) to handle multiple dataset schemas seamlessly.
 
 ### 2. High-Performance Model Architecture
@@ -20,6 +20,59 @@ A deep learning framework to translate American Sign Language (ASL) video coordi
 ### 3. Leak-Free Evaluation and Dataset Auditing
 * **Signer-Based Splits**: Automatically parses metadata manifests to separate training, validation, and test splits by uploader/channel ID. This guarantees that validation metrics are evaluated on unseen signers, preventing signer data leakage.
 * **Fast Profiler (`src/validate_dataset.py`)**: Evaluates landmark quality (sequence length distribution, hand/face tracking dropout percentages, and frame-to-frame wrist jitter noise) on large directories in seconds using non-recursive directory lists.
+
+---
+
+## 📐 Mathematical Formulation of Coordinate Normalization
+
+To achieve scale and camera distance invariance, frame-level landmarks are normalized as follows:
+
+1. **Mid-Shoulder Centering ($p_{\text{mid-shoulder}}$)**:
+   $$p_{\text{mid-shoulder}} = \frac{p_{\text{shoulder1}} + p_{\text{shoulder2}}}{2}$$
+   $$w_{\text{shoulder}} = \max\left(0.01, \|p_{\text{shoulder1}} - p_{\text{shoulder2}}\|_2\right)$$
+   
+   *For MediaPipe inputs, shoulders are indices `11` and `12`.*
+   *For OpenPose BODY_25 inputs, shoulders are indices `2` and `5`.*
+
+2. **Pose Coordinate Normalization ($p_{\text{norm}}$)**:
+   $$p_{\text{norm}} = \frac{p - p_{\text{mid-shoulder}}}{w_{\text{shoulder}}}$$
+
+3. **Hand Coordinate Normalization ($h_{\text{norm}}$)**:
+   Hands are centered relative to their respective wrist joint ($w_{\text{wrist}}$, index `0` of the hand stream):
+   $$h_{\text{norm}} = \frac{h - w_{\text{wrist}}}{w_{\text{shoulder}}}$$
+
+4. **Face Coordinate Normalization ($f_{\text{norm}}$)**:
+   Face coordinates are centered relative to the facial bounding centroid ($c_{\text{face-centroid}}$):
+   $$f_{\text{norm}} = \frac{f - c_{\text{face-centroid}}}{w_{\text{shoulder}}}$$
+
+---
+
+## 📊 Landmark File & Dimension Specifications
+
+### 1. NPZ File Format Structure
+If using pre-extracted `.npz` files, each file contains the following compressed NumPy arrays:
+* **`pose`**: Shape `(num_frames, 33, 4)` representing $(x, y, z, \text{visibility})$.
+* **`left_hand`**: Shape `(num_frames, 21, 3)` representing $(x, y, z)$.
+* **`right_hand`**: Shape `(num_frames, 21, 3)` representing $(x, y, z)$.
+* **`face`**: Shape `(num_frames, 92, 3)` representing $(x, y, z)$.
+
+### 2. Feature Dimension Breakdown
+The feature vectors are concatenated per frame into a single 1D tensor:
+* **Face Enabled (Default)**: **534 dimensions**
+  $$\text{Pose (} 33 \times 4 = 132\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} + \text{Face (} 92 \times 3 = 276\text{)} = 534\text{ dims}$$
+* **Face Disabled (`--no_face`)**: **258 dimensions**
+  $$\text{Pose (} 33 \times 4 = 132\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} = 258\text{ dims}$$
+
+---
+
+## 📋 Metadata CSV/TSV Schema Mapping
+
+The metadata parser dynamically maps columns by matching keywords (case-insensitive):
+* **Video/File Key**: Automatically maps the first column containing `id`, `file`, `video`, `key`, or `name`.
+* **Target English Text**: Automatically maps the first column containing `text`, `trans`, `gloss`, `sentence`, or `caption`.
+* **Signer/Uploader ID**: Automatically maps the first column containing `signer`, `channel`, `uploader`, `author`, or `subject` to enforce independent split isolation.
+
+*Note: If the metadata filepath points to a file containing split patterns (e.g. `_train.csv`), the training loop will automatically search the directory and dynamically merge all splits (`_train`, `_val`, `_test`) before partition.*
 
 ---
 
