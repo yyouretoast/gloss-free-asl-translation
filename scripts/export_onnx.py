@@ -43,7 +43,7 @@ def export_encoder_to_onnx(model_path=None, output_onnx_path="results/conformer_
         (dummy_input_features, dummy_attention_mask),
         output_onnx_path,
         export_params=True,
-        opset_version=14,  # Opsets 14+ support LayerNorm and Swish (SiLU) operations efficiently
+        opset_version=18,  # Opsets 14+ support LayerNorm and Swish (SiLU) operations efficiently
         do_constant_folding=True,
         input_names=['input_features', 'attention_mask'],
         output_names=['encoder_outputs', 'downsampled_mask'],
