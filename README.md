@@ -111,7 +111,7 @@ The translation model is evaluated at the end of each training epoch using two p
 │   ├── data_pipeline.py   # MediaPipe extractor and formatter
 │   ├── dataset.py         # LandmarkDataset & collators (NPZ + JSON OpenPose)
 │   ├── train.py           # Seq2SeqTrainer setup and wrapper
-│   └── validate_dataset.py# Statistics and noise validation script
+│   └── validate_dataset.py # Statistics and noise validation script
 ├── kaggle_training.ipynb  # Interactive Kaggle GPU/TPU training notebook
 ├── requirements.txt       # Environment specifications
 └── README.md              # Project overview
