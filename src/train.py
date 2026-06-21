@@ -176,9 +176,9 @@ def main():
         file_candidates.sort(key=file_col_priority)
         file_col = file_candidates
         
-        # Target/Text column: matches text, trans, gloss, sentence, caption, but NOT key/id/file/video words
+        # Target/Text column: matches text, trans, gloss, sentence, caption, but NOT key/id/file/video/name words
         text_col = [c for c in df.columns if any(x in c.lower() for x in ['text', 'trans', 'gloss', 'sentence', 'caption'])
-                    and not any(x in c.lower() for x in ['id', 'key', 'file', 'video'])]
+                    and not any(x in c.lower() for x in ['id', 'key', 'file', 'video', 'name'])]
         signer_col = [c for c in df.columns if any(x in c.lower() for x in ['signer', 'channel', 'uploader', 'author', 'subject'])]
         
         if file_col and text_col:
