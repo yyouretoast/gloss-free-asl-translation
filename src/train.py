@@ -8,6 +8,7 @@ from transformers import (
     Seq2SeqTrainer, 
     Seq2SeqTrainingArguments
 )
+from transformers.modeling_outputs import BaseModelOutput
 from src.dataset import ASLLandmarkDataset, CollateLandmarks
 from src.models.manual_encoder import ConformerEncoder
 
@@ -50,7 +51,7 @@ class ASLTranslationModel(nn.Module):
         outputs = self.dimension_projection(outputs)
         
         # Pass visual embeddings directly as T5 encoder output hidden states
-        encoder_outputs = (outputs,)
+        encoder_outputs = BaseModelOutput(last_hidden_state=outputs)
         
         # T5 expects 1/True for valid, 0/False for padding frames
         t5_attention_mask = (~downsampled_mask).long() if downsampled_mask is not None else None
@@ -71,7 +72,7 @@ class ASLTranslationModel(nn.Module):
         with torch.no_grad():
             outputs, downsampled_mask = self.encoder(input_features, attention_mask=attention_mask)
             outputs = self.dimension_projection(outputs)
-            encoder_outputs = (outputs,)
+            encoder_outputs = BaseModelOutput(last_hidden_state=outputs)
             
             # T5 expects 1/True for valid, 0/False for padding frames
             t5_attention_mask = (~downsampled_mask).long() if downsampled_mask is not None else None
