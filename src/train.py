@@ -108,6 +108,7 @@ def main():
     parser.add_argument("--metadata_file", type=str, default=None, help="Path to metadata CSV/TSV file mapping video IDs to translations")
     parser.add_argument("--no_face", action="store_true", help="Disable facial expression landmarks (for ablation study)")
     parser.add_argument("--max_len", type=int, default=150, help="Maximum frame sequence length (caps longer sequences to prevent OOM)")
+    parser.add_argument("--max_target_len", type=int, default=30, help="Maximum target text sequence token length")
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -284,7 +285,7 @@ def main():
 
     # 5. Collator
     # Pass tokenizer to collator to convert English targets to token IDs
-    collate_fn = CollateLandmarks(tokenizer=tokenizer, max_target_len=30)
+    collate_fn = CollateLandmarks(tokenizer=tokenizer, max_target_len=args.max_target_len)
 
     # 6. Initialize Model dynamically using input shape
     sample_batch = train_dataset[0]
@@ -298,6 +299,15 @@ def main():
         num_heads=4,
         kernel_size=31
     )
+    # Set model's autoregressive generation config maximum length to avoid T5 default 20-token truncation
+    model.generation_config.max_length = args.max_target_len
+
+    # Calculate warmup steps dynamically based on dataset size and epochs
+    steps_per_epoch = len(train_dataset) // args.batch_size
+    if steps_per_epoch == 0:
+        steps_per_epoch = 1
+    total_training_steps = steps_per_epoch * args.epochs
+    warmup_steps = int(0.1 * total_training_steps)
 
     # 6. Define Seq2Seq Training Arguments
     training_args = Seq2SeqTrainingArguments(
@@ -315,7 +325,7 @@ def main():
         fp16=torch.cuda.is_available(), # Use mixed precision if GPU available
         report_to="none",  # Prevents wandb prompts on Kaggle
         remove_unused_columns=False,
-        warmup_ratio=0.1            # Warmup learning rate scheduler to stabilize training early
+        warmup_steps=warmup_steps     # Dynamic warmup steps to stabilize training early
     )
 
     # 7. Define metrics computation

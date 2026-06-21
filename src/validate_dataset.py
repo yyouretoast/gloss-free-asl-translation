@@ -94,9 +94,22 @@ def analyze_single_file(file_path):
     face_missing = np.all(face == 0, axis=(1, 2))
     face_missing_pct = (np.sum(face_missing) / num_frames) * 100.0
 
-    # 3. Estimate coordinate noise (average delta of wrist joints frame-to-frame)
+    # 3. Estimate scale-normalized coordinate noise (average delta of wrist joints frame-to-frame scaled by shoulder width)
     avg_wrist_noise = 0.0
     if num_frames > 1:
+        # Calculate shoulder width to normalize coordinate delta
+        if pose.shape[1] == 25: # OpenPose
+            shoulder_idx_1 = 5
+            shoulder_idx_2 = 2
+        else: # MediaPipe
+            shoulder_idx_1 = 11
+            shoulder_idx_2 = 12
+            
+        shoulder_diff = pose[:, shoulder_idx_1, :2] - pose[:, shoulder_idx_2, :2]
+        shoulder_widths = np.linalg.norm(shoulder_diff, axis=-1)
+        mean_shoulder_width = float(np.mean(shoulder_widths))
+        mean_shoulder_width = max(0.01, mean_shoulder_width)
+
         # Extract left and right wrist (x, y, z)
         left_wrists = pose[:, left_wrist_pose_idx, :3]
         right_wrists = pose[:, right_wrist_pose_idx, :3]
@@ -116,7 +129,7 @@ def analyze_single_file(file_path):
             all_deltas.extend(valid_right)
             
         if all_deltas:
-            avg_wrist_noise = float(np.mean(all_deltas))
+            avg_wrist_noise = float(np.mean(all_deltas)) / mean_shoulder_width
 
     # 4. Extract Signer ID from filename (assuming format: signerID_videoID.npz or similar)
     filename = os.path.basename(file_path)
