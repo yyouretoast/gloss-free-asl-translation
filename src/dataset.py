@@ -58,42 +58,54 @@ class ASLLandmarkDataset(Dataset):
         - Pose: centered relative to mid-shoulder, scaled by shoulder width.
         - Hands: centered relative to their respective wrist joints and scaled by shoulder width.
         - Face: centered relative to face centroid and scaled by shoulder width.
+        Normalizes only spatial coordinates, leaving visibility/confidence untouched.
         """
-        # 1. Pose Normalization
-        pose_coords = pose[..., :3]
-        visibility = pose[..., 3:4] if pose.shape[-1] == 4 else pose[..., 2:3]
-        
         # OpenPose BODY_25 has 25 keypoints (shoulders are index 2 and 5)
         # MediaPipe has 33 keypoints (shoulders are index 11 and 12)
         if pose.shape[1] == 25:
+            spatial_dim = 2
             shoulder_idx_1 = 5
             shoulder_idx_2 = 2
         else:
+            spatial_dim = 3
             shoulder_idx_1 = 11
             shoulder_idx_2 = 12
             
-        mid_shoulder = (pose_coords[:, shoulder_idx_1, :] + pose_coords[:, shoulder_idx_2, :]) / 2.0  # (num_frames, 3)
-        mid_shoulder = np.expand_dims(mid_shoulder, axis=1)  # (num_frames, 1, 3)
+        # 1. Pose Normalization
+        pose_spatial = pose[..., :spatial_dim]
+        pose_extra = pose[..., spatial_dim:]
         
-        shoulder_width = np.linalg.norm(pose_coords[:, shoulder_idx_1, :] - pose_coords[:, shoulder_idx_2, :], axis=-1, keepdims=True)
+        mid_shoulder = (pose_spatial[:, shoulder_idx_1, :] + pose_spatial[:, shoulder_idx_2, :]) / 2.0  # (num_frames, spatial_dim)
+        mid_shoulder = np.expand_dims(mid_shoulder, axis=1)  # (num_frames, 1, spatial_dim)
+        
+        shoulder_width = np.linalg.norm(pose_spatial[:, shoulder_idx_1, :] - pose_spatial[:, shoulder_idx_2, :], axis=-1, keepdims=True)
         shoulder_width = np.expand_dims(shoulder_width, axis=1)  # (num_frames, 1, 1)
         
         # Clip shoulder width to a safe minimum of 0.01 to prevent NaNs or division by zero
         shoulder_width = np.clip(shoulder_width, a_min=0.01, a_max=None)
         
-        norm_pose_coords = (pose_coords - mid_shoulder) / shoulder_width
-        norm_pose = np.concatenate([norm_pose_coords, visibility], axis=-1)
+        norm_pose_spatial = (pose_spatial - mid_shoulder) / shoulder_width
+        norm_pose = np.concatenate([norm_pose_spatial, pose_extra], axis=-1)
         
         # 2. Hand Normalization (Wrist-relative & body-scale normalized)
-        left_wrist = np.expand_dims(left_hand[:, 0, :], axis=1)  # (num_frames, 1, 3)
-        norm_left_hand = (left_hand - left_wrist) / shoulder_width
+        lh_spatial = left_hand[..., :spatial_dim]
+        lh_extra = left_hand[..., spatial_dim:]
+        left_wrist = np.expand_dims(lh_spatial[:, 0, :], axis=1)  # (num_frames, 1, spatial_dim)
+        norm_lh_spatial = (lh_spatial - left_wrist) / shoulder_width
+        norm_left_hand = np.concatenate([norm_lh_spatial, lh_extra], axis=-1)
         
-        right_wrist = np.expand_dims(right_hand[:, 0, :], axis=1)  # (num_frames, 1, 3)
-        norm_right_hand = (right_hand - right_wrist) / shoulder_width
+        rh_spatial = right_hand[..., :spatial_dim]
+        rh_extra = right_hand[..., spatial_dim:]
+        right_wrist = np.expand_dims(rh_spatial[:, 0, :], axis=1)  # (num_frames, 1, spatial_dim)
+        norm_rh_spatial = (rh_spatial - right_wrist) / shoulder_width
+        norm_right_hand = np.concatenate([norm_rh_spatial, rh_extra], axis=-1)
         
         # 3. Face Normalization (Centroid-relative & body-scale normalized)
-        face_centroid = np.mean(face, axis=1, keepdims=True)  # (num_frames, 1, 3)
-        norm_face = (face - face_centroid) / shoulder_width
+        face_spatial = face[..., :spatial_dim]
+        face_extra = face[..., spatial_dim:]
+        face_centroid = np.mean(face_spatial, axis=1, keepdims=True)  # (num_frames, 1, spatial_dim)
+        norm_face_spatial = (face_spatial - face_centroid) / shoulder_width
+        norm_face = np.concatenate([norm_face_spatial, face_extra], axis=-1)
         
         return norm_pose, norm_left_hand, norm_right_hand, norm_face
 

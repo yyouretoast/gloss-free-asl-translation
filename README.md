@@ -151,10 +151,12 @@ python -m src.train --epochs 1 --batch_size 2
 
 ## 📈 Running on Kaggle
 
-To train the model on the full **How2Sign** or **YouTube-ASL** datasets, use the provided `kaggle_training.ipynb` notebook:
+To train the model on the **How2Sign** dataset, use the provided `kaggle_training.ipynb` notebook:
 
 1. Create a new notebook on Kaggle.
-2. Add the dataset: **How2Sign Keypoints** (e.g., `nazarboholii/how2sign-keypoints`).
+2. Add the dataset: **How2Sign Keypoints** (e.g., `nazarboholii/how2sign-keypoints`). 
+   > [!WARNING]
+   > `nazarboholii/how2sign-keypoints` is a third-party community upload rather than an official release. Before starting full training, verify its completeness (check that train/val/test splits exist and that uploader signer ID metadata matches the CSV splits).
 3. Import the `kaggle_training.ipynb` file.
 4. Execute the cells sequentially. The first cell will automatically pull down all the latest updates directly from this repository:
    ```python
@@ -179,4 +181,5 @@ The training entry point (`src/train.py`) supports the following customized conf
 | `--batch_size` | `int` | `8` | Size of training batches |
 | `--lr` | `float` | `1e-4` | Learning rate |
 | `--no_face` | `bool` | `False` | Disables face landmarks to study coordinate ablation (reduces dims) |
+| `--max_len` | `int` | `150` | Maximum frame sequence length (caps longer sequences to prevent OOM) |
 | `--t5_model` | `str` | `t5-small` | Hugging Face T5 decoder checkpoint (`t5-small` or `t5-base`) |

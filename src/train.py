@@ -107,6 +107,7 @@ def main():
     parser.add_argument("--output_dir", type=str, default="results/checkpoints", help="Output checkpoints folder")
     parser.add_argument("--metadata_file", type=str, default=None, help="Path to metadata CSV/TSV file mapping video IDs to translations")
     parser.add_argument("--no_face", action="store_true", help="Disable facial expression landmarks (for ablation study)")
+    parser.add_argument("--max_len", type=int, default=150, help="Maximum frame sequence length (caps longer sequences to prevent OOM)")
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -185,7 +186,7 @@ def main():
     full_dataset = ASLLandmarkDataset(
         data_dir=args.data_dir,
         metadata_dict=metadata,
-        max_len=150,
+        max_len=args.max_len,
         include_face=include_face
     )
     
@@ -270,14 +271,14 @@ def main():
         data_dir=args.data_dir,
         metadata_dict=metadata,
         file_list=train_files,
-        max_len=150,
+        max_len=args.max_len,
         include_face=include_face
     )
     val_dataset = ASLLandmarkDataset(
         data_dir=args.data_dir,
         metadata_dict=metadata,
         file_list=val_files,
-        max_len=150,
+        max_len=args.max_len,
         include_face=include_face
     )
 
@@ -313,7 +314,8 @@ def main():
         predict_with_generate=True,  # Enables generating actual text during eval
         fp16=torch.cuda.is_available(), # Use mixed precision if GPU available
         report_to="none",  # Prevents wandb prompts on Kaggle
-        remove_unused_columns=False
+        remove_unused_columns=False,
+        warmup_ratio=0.1            # Warmup learning rate scheduler to stabilize training early
     )
 
     # 7. Define metrics computation
