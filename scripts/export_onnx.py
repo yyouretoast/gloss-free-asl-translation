@@ -57,12 +57,21 @@ def export_encoder_to_onnx(model_path=None, output_onnx_path="results/conformer_
     print("ONNX export completed successfully!")
 
 if __name__ == "__main__":
-    # Check if there is an argument passed to override input dimension (e.g. 411 for How2Sign)
+    # Usage: python scripts/export_onnx.py [input_dim] [model_path] [output_onnx_path]
     input_dim = 534
+    model_path = None
+    output_onnx_path = "results/conformer_encoder.onnx"
+    
     if len(sys.argv) > 1:
         try:
             input_dim = int(sys.argv[1])
         except ValueError:
             pass
             
-    export_encoder_to_onnx(input_dim=input_dim)
+    if len(sys.argv) > 2:
+        model_path = sys.argv[2]
+        
+    if len(sys.argv) > 3:
+        output_onnx_path = sys.argv[3]
+            
+    export_encoder_to_onnx(model_path=model_path, output_onnx_path=output_onnx_path, input_dim=input_dim)
