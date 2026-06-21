@@ -57,8 +57,8 @@ def process_single_folder(args_tuple):
         right_hand = np.stack(right_hand_list, axis=0)
         face = np.stack(face_list, axis=0)
         
-        # Save as compressed npz
-        np.savez_compressed(output_filepath, pose=pose, left_hand=left_hand, right_hand=right_hand, face=face)
+        # Save as npz (uncompressed for speed)
+        np.savez(output_filepath, pose=pose, left_hand=left_hand, right_hand=right_hand, face=face)
         return True
     except Exception as e:
         print(f"Error processing {input_folder}: {e}")
