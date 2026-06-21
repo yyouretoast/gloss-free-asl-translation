@@ -290,6 +290,11 @@ def main():
         
     # Generate mock files if path is empty/doesn't exist for quick local verification
     if not os.path.exists(dir_path) or (not has_npz and not has_subdirs):
+        # Gracefully handle read-only partitions (like Kaggle input datasets) to prevent write PermissionErrors
+        if dir_path.startswith('/kaggle/input') or not os.access(os.path.dirname(dir_path) or '.', os.W_OK):
+            import sys
+            print(f"Error: Dataset directory {dir_path} does not exist and is in a read-only partition.")
+            sys.exit(1)
         generate_mock_dataset(dir_path, num_files=5)
         
     validate_dataset(dir_path, limit=args.limit)

@@ -30,21 +30,21 @@ def process_single_folder(args_tuple):
             if people:
                 p = people[0]
                 pose_raw = p.get('pose_keypoints_2d', [])
-                pose_arr = np.array(pose_raw).reshape(25, 3) if len(pose_raw) == 75 else np.zeros((25, 3))
+                pose_arr = np.array(pose_raw, dtype=np.float32).reshape(25, 3) if len(pose_raw) == 75 else np.zeros((25, 3), dtype=np.float32)
                 
                 face_raw = p.get('face_keypoints_2d', [])
-                face_arr = np.array(face_raw).reshape(70, 3) if len(face_raw) == 210 else np.zeros((70, 3))
+                face_arr = np.array(face_raw, dtype=np.float32).reshape(70, 3) if len(face_raw) == 210 else np.zeros((70, 3), dtype=np.float32)
                 
                 lh_raw = p.get('hand_left_keypoints_2d', [])
-                lh_arr = np.array(lh_raw).reshape(21, 3) if len(lh_raw) == 63 else np.zeros((21, 3))
+                lh_arr = np.array(lh_raw, dtype=np.float32).reshape(21, 3) if len(lh_raw) == 63 else np.zeros((21, 3), dtype=np.float32)
                 
                 rh_raw = p.get('hand_right_keypoints_2d', [])
-                rh_arr = np.array(rh_raw).reshape(21, 3) if len(rh_raw) == 63 else np.zeros((21, 3))
+                rh_arr = np.array(rh_raw, dtype=np.float32).reshape(21, 3) if len(rh_raw) == 63 else np.zeros((21, 3), dtype=np.float32)
             else:
-                pose_arr = np.zeros((25, 3))
-                face_arr = np.zeros((70, 3))
-                lh_arr = np.zeros((21, 3))
-                rh_arr = np.zeros((21, 3))
+                pose_arr = np.zeros((25, 3), dtype=np.float32)
+                face_arr = np.zeros((70, 3), dtype=np.float32)
+                lh_arr = np.zeros((21, 3), dtype=np.float32)
+                rh_arr = np.zeros((21, 3), dtype=np.float32)
                 
             pose_list.append(pose_arr)
             face_list.append(face_arr)
@@ -56,8 +56,8 @@ def process_single_folder(args_tuple):
         right_hand = np.stack(right_hand_list, axis=0)
         face = np.stack(face_list, axis=0)
         
-        # Save as npz (uncompressed for speed)
-        np.savez(output_filepath, pose=pose, left_hand=left_hand, right_hand=right_hand, face=face)
+        # Save as compressed npz to fit in RAM disk limits (/dev/shm)
+        np.savez_compressed(output_filepath, pose=pose, left_hand=left_hand, right_hand=right_hand, face=face)
         return True
     except Exception as e:
         print(f"Error processing {input_folder}: {e}")

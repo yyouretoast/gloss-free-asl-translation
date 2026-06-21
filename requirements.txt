@@ -4,7 +4,9 @@ opencv-python
 mediapipe==0.10.14
 torch
 torchvision
-transformers
+transformers>=4.46.0
 tqdm
 jiwer
 sacrebleu
+sentencepiece
+protobuf
