@@ -76,6 +76,25 @@ The metadata parser dynamically maps columns by matching keywords (case-insensit
 
 ---
 
+## 📈 Evaluation & Metrics
+
+The translation model is evaluated at the end of each training epoch using two primary sequence-to-sequence evaluation metrics:
+
+1. **Word Error Rate (WER)** (calculated using `jiwer`):
+   $$\text{WER} = \frac{S + D + I}{N}$$
+   where:
+   * $S$ is the number of word substitutions.
+   * $D$ is the number of word deletions.
+   * $I$ is the number of word insertions.
+   * $N$ is the total number of words in the ground-truth target translation.
+   
+   WER evaluates the edit distance between the model's prediction and the target translation. A lower WER is better ($0.0$ indicates a perfect match).
+
+2. **BLEU Score** (calculated using `sacrebleu`):
+   Computes $N$-gram precision overlap (up to 4-grams) between the generated translations and the ground-truth target sentences. A higher BLEU score is better ($100.0$ indicates a perfect n-gram match).
+
+---
+
 ## 📂 Project Structure
 
 ```bash
