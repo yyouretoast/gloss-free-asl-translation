@@ -142,6 +142,7 @@ def main():
     parser.add_argument("--no_face", action="store_true", help="Disable facial expression landmarks (for ablation study)")
     parser.add_argument("--max_len", type=int, default=150, help="Maximum frame sequence length (caps longer sequences to prevent OOM)")
     parser.add_argument("--max_target_len", type=int, default=30, help="Maximum target text sequence token length")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to checkpoint folder to resume training from, or 'latest' to auto-detect")
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -443,7 +444,18 @@ def main():
 
     # 8. Start Training Loop
     print("\nStarting training loop...")
-    trainer.train()
+    resume_path = args.resume_from_checkpoint
+    if resume_path == "latest":
+        import glob
+        # Auto-detect latest checkpoint under output_dir
+        checkpoint_dirs = sorted(glob.glob(os.path.join(args.output_dir, "checkpoint-*")), key=lambda x: int(x.split("-")[-1]))
+        resume_path = checkpoint_dirs[-1] if checkpoint_dirs else None
+        if resume_path:
+            print(f"Auto-detected latest checkpoint to resume from: {resume_path}")
+        else:
+            print("No checkpoints found to resume from. Starting from scratch.")
+            
+    trainer.train(resume_from_checkpoint=resume_path)
     print("Training completed successfully!")
 
 if __name__ == "__main__":
