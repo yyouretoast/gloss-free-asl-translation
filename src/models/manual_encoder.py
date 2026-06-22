@@ -251,13 +251,8 @@ class ConformerEncoder(nn.Module):
         if key_padding_mask is not None:
             # Slices every 2nd index along seq_len to match Conv1d stride=2
             downsampled_mask = key_padding_mask[:, ::2]
-            # Robustly align sequence lengths using concatenation/padding or truncation
-            if downsampled_mask.size(1) < x.size(1):
-                diff = x.size(1) - downsampled_mask.size(1)
-                padding_tensor = torch.ones((downsampled_mask.size(0), diff), dtype=torch.bool, device=downsampled_mask.device)
-                downsampled_mask = torch.cat([downsampled_mask, padding_tensor], dim=1)
-            elif downsampled_mask.size(1) > x.size(1):
-                downsampled_mask = downsampled_mask[:, :x.size(1)]
+            # Ensure sequence length alignment (handles stride boundary)
+            downsampled_mask = downsampled_mask[:, :x.size(1)]
                 
         # Second half of blocks
         for block in self.second_half:
