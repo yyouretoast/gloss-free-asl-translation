@@ -7,6 +7,10 @@ def analyze_single_file(file_path):
     Analyzes a single landmark .npz file or OpenPose directory to compute statistics.
     """
     if os.path.isdir(file_path):
+        try:
+            import orjson
+        except ImportError:
+            orjson = None
         import json
         json_files = sorted(glob.glob(os.path.join(file_path, "*.json")))
         num_frames = len(json_files)
@@ -16,8 +20,12 @@ def analyze_single_file(file_path):
         pose_list, left_hand_list, right_hand_list, face_list = [], [], [], []
         for jf in json_files:
             try:
-                with open(jf, 'r') as f:
-                    data = json.load(f)
+                with open(jf, 'rb') as f:
+                    content = f.read()
+                    if orjson is not None:
+                        data = orjson.loads(content)
+                    else:
+                        data = json.loads(content)
                 people = data.get('people', [])
                 if people:
                     p = people[0]

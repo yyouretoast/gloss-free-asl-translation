@@ -1,9 +1,13 @@
 import os
 import glob
 try:
-    import ujson as json
+    import orjson
 except ImportError:
-    import json
+    orjson = None
+    try:
+        import ujson as json
+    except ImportError:
+        import json
 import numpy as np
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
@@ -23,8 +27,12 @@ def process_single_folder(args_tuple):
         pose_list, left_hand_list, right_hand_list, face_list = [], [], [], []
         
         for jf in json_files:
-            with open(jf, 'r') as f:
-                data = json.load(f)
+            with open(jf, 'rb') as f:
+                content = f.read()
+                if orjson is not None:
+                    data = orjson.loads(content)
+                else:
+                    data = json.loads(content)
             
             people = data.get('people', [])
             if people:

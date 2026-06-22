@@ -12,3 +12,5 @@ sentencepiece
 protobuf
 onnx
 onnxscript
+orjson
+
