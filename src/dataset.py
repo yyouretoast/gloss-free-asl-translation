@@ -86,8 +86,9 @@ class ASLLandmarkDataset(Dataset):
         shoulder_width = np.linalg.norm(pose_spatial[:, shoulder_idx_1, :] - pose_spatial[:, shoulder_idx_2, :], axis=-1, keepdims=True)
         shoulder_width = np.expand_dims(shoulder_width, axis=1)  # (num_frames, 1, 1)
         
-        # Clip shoulder width to a safe minimum of 0.01 to prevent NaNs or division by zero
-        shoulder_width = np.clip(shoulder_width, a_min=0.01, a_max=None)
+        # Avoid coordinate explosion when shoulder width is too small (e.g. tracking failure)
+        # by falling back to a sensible unit scale (0.25) instead of near-zero values.
+        shoulder_width = np.where(shoulder_width < 0.05, 0.25, shoulder_width)
         
         norm_pose_spatial = (pose_spatial - mid_shoulder) / shoulder_width
         norm_pose = np.concatenate([norm_pose_spatial, pose_extra], axis=-1)

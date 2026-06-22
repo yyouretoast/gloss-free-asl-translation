@@ -91,8 +91,8 @@ def main():
         print(f"Error: Candidate OpenPose json folder {json_cand} does not exist!")
         sys.exit(1)
         
-    # 2. Resolve output directory (default to /dev/shm/how2sign_npz to write directly to RAM)
-    output_dir = "/dev/shm/how2sign_npz"
+    # 2. Resolve output directory (default to /tmp/how2sign_npz to avoid 2GB /dev/shm limit on Kaggle)
+    output_dir = "/tmp/how2sign_npz"
     if len(sys.argv) > 1:
         output_dir = sys.argv[1]
     os.makedirs(output_dir, exist_ok=True)

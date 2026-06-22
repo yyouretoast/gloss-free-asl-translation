@@ -31,13 +31,19 @@ class ASLTranslationModel(nn.Module):
         # 2. Pretrained T5 Decoder
         self.t5 = T5ForConditionalGeneration.from_pretrained(t5_model_name)
         
-        # Ensure T5 projection dims match our d_model
-        # t5-small has d_model=512, t5-base has d_model=768
+        # Freeze T5 encoder parameters to save VRAM and avoid optimizer state overhead
+        for param in self.t5.encoder.parameters():
+            param.requires_grad = False
+            
+        # T5-Small d_model is 512, T5-Base is 768
         t5_d_model = self.t5.config.d_model
-        if d_model != t5_d_model:
-            self.dimension_projection = nn.Linear(d_model, t5_d_model)
-        else:
-            self.dimension_projection = nn.Identity()
+        
+        # Non-Linear MLP Modality Bridge to project Conformer features to text embedding space
+        self.dimension_projection = nn.Sequential(
+            nn.Linear(d_model, t5_d_model),
+            nn.GELU(),
+            nn.LayerNorm(t5_d_model)
+        )
 
         # Expose generation config for Seq2SeqTrainer
         self.generation_config = self.t5.generation_config
@@ -47,14 +53,18 @@ class ASLTranslationModel(nn.Module):
         # outputs shape: (batch, seq_len // 2, d_model)
         outputs, downsampled_mask = self.encoder(input_features, attention_mask=attention_mask)
         
-        # Project dimensions if needed (Identity if d_model == t5_d_model)
+        # Project dimensions using the MLP bridge
         outputs = self.dimension_projection(outputs)
         
         # Pass visual embeddings directly as T5 encoder output hidden states
         encoder_outputs = BaseModelOutput(last_hidden_state=outputs)
         
         # T5 expects 1/True for valid, 0/False for padding frames
-        t5_attention_mask = (~downsampled_mask).long() if downsampled_mask is not None else None
+        t5_attention_mask = None
+        if downsampled_mask is not None:
+            t5_attention_mask = (~downsampled_mask).long()
+            # Force the first token to be active to prevent cross-attention NaNs inside T5
+            t5_attention_mask[:, 0] = 1
         
         # Run T5 Decoder forward pass
         return self.t5(
@@ -75,7 +85,10 @@ class ASLTranslationModel(nn.Module):
             encoder_outputs = BaseModelOutput(last_hidden_state=outputs)
             
             # T5 expects 1/True for valid, 0/False for padding frames
-            t5_attention_mask = (~downsampled_mask).long() if downsampled_mask is not None else None
+            t5_attention_mask = None
+            if downsampled_mask is not None:
+                t5_attention_mask = (~downsampled_mask).long()
+                t5_attention_mask[:, 0] = 1
             
             # Clean kwargs that are not accepted by T5's generate method
             kwargs.pop('file_ids', None)
@@ -103,6 +116,19 @@ class ASLTranslationModel(nn.Module):
             destination.update(cloned_sd)
             return destination
         return cloned_sd
+
+    def gradient_checkpointing_enable(self, **kwargs):
+        """
+        Delegates gradient checkpointing to the T5 module.
+        Required by Seq2SeqTrainer when gradient_checkpointing=True is set.
+        """
+        self.t5.gradient_checkpointing_enable(**kwargs)
+
+    def gradient_checkpointing_disable(self):
+        """
+        Delegates disabling of gradient checkpointing to the T5 module.
+        """
+        self.t5.gradient_checkpointing_disable()
 
 def main():
     import argparse
@@ -363,7 +389,13 @@ def main():
         fp16=torch.cuda.is_available(), # Use mixed precision if GPU available
         report_to="none",  # Prevents wandb prompts on Kaggle
         remove_unused_columns=False,
-        warmup_steps=warmup_steps     # Dynamic warmup steps to stabilize training early
+        warmup_steps=warmup_steps,    # Dynamic warmup steps to stabilize training early
+        
+        # --- Performance & Memory Enhancements ---
+        optim="adafactor",                  # Native T5 optimizer, saves massive VRAM
+        gradient_checkpointing=True,        # Reduces activation memory footprint
+        dataloader_num_workers=2,           # Parallelizes CPU data fetching
+        dataloader_pin_memory=True          # Accelerates CPU-to-GPU data transfers
     )
 
     # 7. Define metrics computation
