@@ -386,6 +386,7 @@ def main():
         logging_steps=1,
         eval_strategy="epoch",
         save_strategy="epoch",
+        save_total_limit=3,          # Limits checkpoints to keep only the 3 most recent, preventing disk overflow
         predict_with_generate=True,  # Enables generating actual text during eval
         fp16=torch.cuda.is_available(), # Use mixed precision if GPU available
         report_to="none",  # Prevents wandb prompts on Kaggle
