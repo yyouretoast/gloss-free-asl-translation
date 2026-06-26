@@ -125,6 +125,7 @@ def main():
         warmup_steps=warmup_steps,    # Dynamic warmup steps to stabilize training early
         load_best_model_at_end=True,  # Added per requirements
         metric_for_best_model="wer",  # Added per requirements
+        greater_is_better=False,      # Tells HF that lower WER is better to prevent premature early stopping
         
         # --- Performance & Memory Enhancements ---
         optim="adafactor",                  # Native T5 optimizer, saves massive VRAM
