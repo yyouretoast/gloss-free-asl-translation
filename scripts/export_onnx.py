@@ -6,7 +6,7 @@ import torch
 import onnx
 from typing import Optional
 
-from src.train import ASLTranslationModel
+from src.models.translation_model import ASLTranslationModel
 
 def export_encoder_to_onnx(
     model_path: Optional[str] = None, 

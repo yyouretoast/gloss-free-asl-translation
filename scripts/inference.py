@@ -11,8 +11,7 @@ import torch
 from typing import List
 from transformers import T5TokenizerFast
 
-# TODO: Import from src.models.translation_model in Wave 2. Using src.train for now.
-from src.train import ASLTranslationModel
+from src.models.translation_model import ASLTranslationModel
 from src.dataset import ASLLandmarkDataset
 
 def run_inference(

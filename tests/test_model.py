@@ -1,6 +1,6 @@
 import pytest
 import torch
-from src.train import ASLTranslationModel
+from src.models.translation_model import ASLTranslationModel
 from src.models.manual_encoder import ConformerEncoder
 
 @pytest.fixture

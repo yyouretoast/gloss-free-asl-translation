@@ -1,6 +1,8 @@
 """
 ASL Translation Model Training Orchestrator.
 """
+from __future__ import annotations
+
 
 import os
 import glob

@@ -4,6 +4,7 @@ ASL Translation Model Module.
 This module contains the sequence-to-sequence model connecting a custom
 Conformer Encoder to a pretrained T5 Decoder for sign language translation.
 """
+from __future__ import annotations
 
 import torch
 import torch.nn as nn
