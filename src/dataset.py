@@ -3,7 +3,7 @@ import os
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any
 
 from src.utils.io_utils import discover_landmark_paths, load_openpose_directory
 
@@ -241,7 +241,7 @@ class CollateLandmarks:
         if self.tokenizer is not None:
             tokenized = self.tokenizer(
                 texts,
-                padding=True,
+                padding="max_length",
                 truncation=True,
                 max_length=self.max_target_len,
                 return_tensors="pt"

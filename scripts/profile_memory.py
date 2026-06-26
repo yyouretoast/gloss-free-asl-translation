@@ -1,7 +1,5 @@
 """Profiles memory usage for the ASL Translation model on CPU/GPU."""
 from __future__ import annotations
-import os
-import sys
 import torch
 from transformers import T5Config, T5ForConditionalGeneration
 

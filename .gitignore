@@ -10,3 +10,10 @@ results/
 *.log
 *.md
 !README.md
+
+# Build and test artifacts
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+

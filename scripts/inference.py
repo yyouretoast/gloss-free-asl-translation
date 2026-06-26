@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import os
 import torch
-from pathlib import Path
 from typing import List
 from transformers import T5TokenizerFast
 
@@ -30,7 +29,7 @@ def run_inference(
     print(f"Loading tokenizer: {t5_model_name}")
     tokenizer = T5TokenizerFast.from_pretrained(t5_model_name)
     
-    print(f"Loading dataset...")
+    print("Loading dataset...")
     # Create dataset just to load features properly using the existing logic
     dataset = ASLLandmarkDataset(
         data_dir="", # Unused when file_list is provided
@@ -100,7 +99,6 @@ def main() -> None:
     if args.input:
         input_paths.append(args.input)
     if args.input_dir:
-        import glob
         from src.utils.io_utils import discover_landmark_paths
         discovered = discover_landmark_paths(args.input_dir)
         input_paths.extend(discovered[:args.limit])

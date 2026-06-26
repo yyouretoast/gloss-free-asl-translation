@@ -1,5 +1,3 @@
-import pytest
-import numpy as np
 from src.dataset import ASLLandmarkDataset, CollateLandmarks
 
 def test_dataset_loading_and_normalization(mock_dataset_dir):

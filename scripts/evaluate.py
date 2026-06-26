@@ -8,7 +8,6 @@ import argparse
 import os
 import torch
 import numpy as np
-from typing import Dict, List
 from transformers import T5TokenizerFast
 
 # TODO: Import from src.models.translation_model in Wave 2. Using src.train for now.
@@ -113,11 +112,11 @@ def evaluate(
             decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
             
             all_preds.extend([p.strip() for p in preds])
-            all_labels.extend([l.strip() for l in decoded_labels])
+            all_labels.extend([lbl.strip() for lbl in decoded_labels])
             
     # Compute metrics
     valid_preds = [p if p else " " for p in all_preds]
-    valid_labels = [l if l else " " for l in all_labels]
+    valid_labels = [lbl if lbl else " " for lbl in all_labels]
     
     wer = jiwer.wer(valid_labels, valid_preds)
     bleu = sacrebleu.corpus_bleu(valid_preds, [valid_labels]).score

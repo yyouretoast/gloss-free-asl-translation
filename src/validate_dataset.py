@@ -2,8 +2,7 @@ from __future__ import annotations
 import os
 import json
 import numpy as np
-from pathlib import Path
-from typing import Optional, Dict, Any, Tuple, Set
+from typing import Optional, Dict, Any, Tuple
 
 from src.utils.io_utils import discover_landmark_paths, load_openpose_directory
 

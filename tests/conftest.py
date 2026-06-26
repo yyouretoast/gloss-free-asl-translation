@@ -1,9 +1,7 @@
 import pytest
 import numpy as np
-import torch
 import os
 import tempfile
-from pathlib import Path
 
 @pytest.fixture
 def mock_landmark_data():

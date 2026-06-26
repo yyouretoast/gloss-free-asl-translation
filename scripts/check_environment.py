@@ -1,6 +1,5 @@
 """Checks the local environment for GPU availability and MediaPipe setup."""
 from __future__ import annotations
-import sys
 import torch
 
 def check_gpu() -> None:

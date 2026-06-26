@@ -7,7 +7,7 @@ Conformer Encoder to a pretrained T5 Decoder for sign language translation.
 
 import torch
 import torch.nn as nn
-from typing import Optional, Dict, Any
+from typing import Optional, Any
 from collections import OrderedDict
 from transformers import T5ForConditionalGeneration
 from transformers.modeling_outputs import BaseModelOutput

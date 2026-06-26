@@ -150,11 +150,11 @@ def main():
         
         # Clean whitespaces
         decoded_preds = [p.strip() for p in decoded_preds]
-        decoded_labels = [l.strip() for l in decoded_labels]
+        decoded_labels = [lbl.strip() for lbl in decoded_labels]
         
         # Avoid empty strings causing jiwer errors
         decoded_preds = [p if p else " " for p in decoded_preds]
-        decoded_labels = [l if l else " " for l in decoded_labels]
+        decoded_labels = [lbl if lbl else " " for lbl in decoded_labels]
         
         wer = jiwer.wer(decoded_labels, decoded_preds)
         bleu = sacrebleu.corpus_bleu(decoded_preds, [decoded_labels]).score
