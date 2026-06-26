@@ -2,12 +2,32 @@
 
 A deep learning framework to translate American Sign Language (ASL) video coordinates directly into fluent English sentences without using intermediate gloss representations. The project connects a custom **Conformer Encoder** directly to a pretrained **Hugging Face T5 Decoder** to perform end-to-end visual-to-text sequence generation.
 
----
+## Motivation
 
-## 🚀 Key Achievements & Architectural Features
+This is a solo project aimed at building a gloss-free ASL-to-English translation system using only Kaggle GPUs. The primary focus is on clean engineering, robust pipeline architecture, and practical implementation over immediate state-of-the-art academic metrics. It serves to demonstrate end-to-end deep learning engineering capabilities, from custom PyTorch dataloaders for geometric normalization to seamlessly bridging visual Conformer blocks with pretrained text decoders.
+
+## Demo
+
+*(Placeholder: Hugging Face Spaces Gradio App Link will be added here once training is fully complete and the model is deployed.)*
+
+## Results
+
+*(Placeholder: BLEU-4 and WER metrics on the validation splits will be reported here after the full training run completes.)*
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[MediaPipe Holistic/OpenPose] --> B[Normalization]
+    B --> C[Modality Bridge]
+    C --> D[Conformer Blocks]
+    D --> E[Temporal Downsampling]
+    E --> F[T5 Decoder]
+    F --> G[English Text]
+```
 
 ### 1. Robust Coordinates Processing Pipeline
-* **Targeted Landmark Extraction (`src/data_pipeline.py`)**: Uses MediaPipe to extract keypoints across Pose, Face, and Hands. Slices face landmarks to a optimized **92-point facial subset** (eyebrows, eyes, lips) instead of the full 468 points, reducing coordinate dimensionality by **80%** (from 1404 to 276 dimensions) while preserving critical grammatical facial expressions.
+* **Targeted Landmark Extraction (`src/data_pipeline.py`)**: Uses MediaPipe to extract keypoints across Pose, Face, and Hands. Slices face landmarks to an optimized **92-point facial subset** (eyebrows, eyes, lips) instead of the full 468 points, reducing coordinate dimensionality by **80%** (from 1404 to 276 dimensions) while preserving critical grammatical facial expressions.
 * **Scale & Distance Invariance (`src/dataset.py`)**: Coordinates are geometrically normalized to ensure model invariance to camera distance, signer height, and camera movement.
 * **How2Sign & OpenPose Support (`src/dataset.py`)**: Custom parser to dynamically load OpenPose JSON outputs frame-by-frame. Auto-aligns keypoint layouts (e.g. mapping BODY_25 shoulders vs. MediaPipe landmarks) to handle multiple dataset schemas seamlessly.
 
@@ -17,13 +37,8 @@ A deep learning framework to translate American Sign Language (ASL) video coordi
 * **Rigorous Padding Fixes**: Implements `LayerNorm` (with transpose) instead of standard `BatchNorm1d` within Conformer blocks. This prevents padded zero-tokens in variable-length sequences from biasing batch normalization statistics.
 * **Seamless T5 Cross-Attention Wrapper (`src/train.py`)**: Routes Conformer visual outputs directly to the cross-attention layers of the T5 decoder, bypassing the T5 text encoder completely.
 
-### 3. Leak-Free Evaluation and Dataset Auditing
-* **Signer-Based Splits**: Automatically parses metadata manifests to separate training, validation, and test splits by uploader/channel ID. This guarantees that validation metrics are evaluated on unseen signers, preventing signer data leakage.
-* **Fast Profiler (`src/validate_dataset.py`)**: Evaluates landmark quality (sequence length distribution, hand/face tracking dropout percentages, and frame-to-frame wrist jitter noise) on large directories in seconds using non-recursive directory lists.
-
----
-
-## 📐 Mathematical Formulation of Coordinate Normalization
+<details>
+<summary>Mathematical Formulation of Coordinate Normalization</summary>
 
 To achieve scale and camera distance invariance, frame-level landmarks are normalized as follows:
 
@@ -45,65 +60,28 @@ To achieve scale and camera distance invariance, frame-level landmarks are norma
    Face coordinates are centered relative to the facial bounding centroid ($c_{\text{face-centroid}}$):
    $$f_{\text{norm}} = \frac{f - c_{\text{face-centroid}}}{w_{\text{shoulder}}}$$
 
----
+</details>
 
-## 📊 Landmark File & Dimension Specifications
+### 3. Leak-Free Evaluation and Dataset Auditing
+* **Signer-Based Splits**: Automatically parses metadata manifests to separate training, validation, and test splits by uploader/channel ID. This guarantees that validation metrics are evaluated on unseen signers, preventing signer data leakage.
+* **Fast Profiler (`src/validate_dataset.py`)**: Evaluates landmark quality (sequence length distribution, hand/face tracking dropout percentages, and frame-to-frame wrist jitter noise) on large directories in seconds using non-recursive directory lists.
 
-### 1. NPZ File Format Structure
-If using pre-extracted `.npz` files, each file contains the following compressed NumPy arrays:
-* **`pose`**: Shape `(num_frames, 33, 4)` representing $(x, y, z, \text{visibility})$.
-* **`left_hand`**: Shape `(num_frames, 21, 3)` representing $(x, y, z)$.
-* **`right_hand`**: Shape `(num_frames, 21, 3)` representing $(x, y, z)$.
-* **`face`**: Shape `(num_frames, 92, 3)` representing $(x, y, z)$.
-
-### 2. Feature Dimension Breakdown
+### Feature Dimension Breakdown
 The feature vectors are concatenated per frame into a single 1D tensor depending on the dataset source format:
 
 #### A. MediaPipe Holistic Format (e.g. YouTube-ASL)
 * **Face Enabled (Default)**: **534 dimensions**
   $$\text{Pose (} 33 \times 4 = 132\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} + \text{Face (} 92 \times 3 = 276\text{)} = 534\text{ dims}$$
 * **Face Disabled (`--no_face`)**: **258 dimensions**
-  $$\text{Pose (} 33 \times 4 = 132\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} = 258\text{ dims}$$
 
 #### B. OpenPose BODY_25 Format (e.g. How2Sign)
 * **Face Enabled (Default)**: **411 dimensions**
   $$\text{Pose (} 25 \times 3 = 75\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} + \text{Face (} 70 \times 3 = 210\text{)} = 411\text{ dims}$$
 * **Face Disabled (`--no_face`)**: **201 dimensions**
-  $$\text{Pose (} 25 \times 3 = 75\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} = 201\text{ dims}$$
 
----
+## Setup & Usage
 
-## 📋 Metadata CSV/TSV Schema Mapping
-
-The metadata parser dynamically maps columns by matching keywords (case-insensitive):
-* **Video/File Key**: Automatically maps the first column containing `id`, `file`, `video`, `key`, or `name`.
-* **Target English Text**: Automatically maps the first column containing `text`, `trans`, `gloss`, `sentence`, or `caption`.
-* **Signer/Uploader ID**: Automatically maps the first column containing `signer`, `channel`, `uploader`, `author`, or `subject` to enforce independent split isolation.
-
-*Note: If the metadata filepath points to a file containing split patterns (e.g. `_train.csv`), the training loop will automatically search the directory and dynamically merge all splits (`_train`, `_val`, `_test`) before partition.*
-
----
-
-## 📈 Evaluation & Metrics
-
-The translation model is evaluated at the end of each training epoch using two primary sequence-to-sequence evaluation metrics:
-
-1. **Word Error Rate (WER)** (calculated using `jiwer`):
-   $$\text{WER} = \frac{S + D + I}{N}$$
-   where:
-   * $S$ is the number of word substitutions.
-   * $D$ is the number of word deletions.
-   * $I$ is the number of word insertions.
-   * $N$ is the total number of words in the ground-truth target translation.
-   
-   WER evaluates the edit distance between the model's prediction and the target translation. A lower WER is better ($0.0$ indicates a perfect match).
-
-2. **BLEU Score** (calculated using `sacrebleu`):
-   Computes $N$-gram precision overlap (up to 4-grams) between the generated translations and the ground-truth target sentences. A higher BLEU score is better ($100.0$ indicates a perfect n-gram match).
-
----
-
-## 📂 Project Structure
+### Project Structure
 
 ```bash
 ├── data/                  # Local directory for mock/active landmarks (.npz files)
@@ -116,21 +94,21 @@ The translation model is evaluated at the end of each training epoch using two p
 │   ├── profile_memory.py  # GPU memory estimator for small/base T5 decoders
 │   └── export_onnx.py     # Conformer encoder ONNX export utility
 ├── src/                   # Main source code
-│   ├── __init__.py
+│   ├── models/            # Neural network architectures (Conformer, Encoder, T5 Wrapper)
+│   ├── utils/             # Helper utilities (Metrics, Checkpointing, Visualizers)
 │   ├── data_pipeline.py   # MediaPipe extractor and formatter
 │   ├── dataset.py         # LandmarkDataset & collators (NPZ + JSON OpenPose)
 │   ├── train.py           # Seq2SeqTrainer setup and wrapper
 │   └── validate_dataset.py # Statistics and noise validation script
+├── tests/                 # Unit and integration tests
 ├── kaggle_training.ipynb  # Interactive Kaggle GPU/TPU training notebook
+├── pyproject.toml         # Python package and tool configuration
 ├── requirements.txt       # Environment specifications
 └── README.md              # Project overview
 ```
 
----
+### Local Setup & Installation
 
-## 🛠️ Local Setup & Installation
-
-### 1. Environment Setup
 Clone the repository and set up a virtual environment:
 ```bash
 git clone https://github.com/yyouretoast/gloss-free-asl-translation.git
@@ -146,7 +124,7 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-### 2. Verify Compilation
+### Verify Compilation
 Run the local compilation and forward pass test:
 ```bash
 python scripts/test_model.py
@@ -164,9 +142,7 @@ python scripts/export_onnx.py
 python scripts/export_onnx.py 411
 ```
 
----
-
-## 📈 Running on Kaggle
+### Running on Kaggle
 
 To train the model on the **How2Sign** dataset, use the provided `kaggle_training.ipynb` notebook:
 
@@ -184,9 +160,7 @@ To train the model on the **How2Sign** dataset, use the provided `kaggle_trainin
    * **Full Model (Face Enabled - 411 dimensions)**: Includes critical facial expressions for grammar.
    * **Ablation Model (No Face - 201 dimensions)**: Ignores facial expressions and trains strictly on body/hand trajectories.
 
----
-
-## 📊 Training Options
+### Training Options
 
 The training entry point (`src/train.py`) supports the following customized configuration flags:
 

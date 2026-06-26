@@ -1,137 +1,28 @@
+"""
+ASL Translation Model Training Orchestrator.
+"""
+
 import os
+import glob
 import torch
-import torch.nn as nn
-from collections import OrderedDict
+import argparse
+import numpy as np
+import jiwer
+import sacrebleu
+
 from transformers import (
     T5TokenizerFast, 
-    T5ForConditionalGeneration, 
     Seq2SeqTrainer, 
-    Seq2SeqTrainingArguments
+    Seq2SeqTrainingArguments,
+    EarlyStoppingCallback
 )
-from transformers.modeling_outputs import BaseModelOutput
+
 from src.dataset import ASLLandmarkDataset, CollateLandmarks
-from src.models.manual_encoder import ConformerEncoder
-
-class ASLTranslationModel(nn.Module):
-    """
-    Sequence-to-sequence model connecting the custom Conformer Encoder
-    directly to a pretrained T5 Decoder.
-    """
-    def __init__(self, input_dim=534, d_model=512, t5_model_name='t5-small', num_layers=4, num_heads=4, kernel_size=31):
-        super().__init__()
-        # 1. Custom Conformer Encoder
-        self.encoder = ConformerEncoder(
-            input_dim=input_dim,
-            d_model=d_model,
-            num_layers=num_layers,
-            num_heads=num_heads,
-            kernel_size=kernel_size
-        )
-        
-        # 2. Pretrained T5 Decoder
-        self.t5 = T5ForConditionalGeneration.from_pretrained(t5_model_name)
-        
-        # Freeze T5 encoder parameters to save VRAM and avoid optimizer state overhead
-        for param in self.t5.encoder.parameters():
-            param.requires_grad = False
-            
-        # T5-Small d_model is 512, T5-Base is 768
-        t5_d_model = self.t5.config.d_model
-        
-        # Non-Linear MLP Modality Bridge to project Conformer features to text embedding space
-        self.dimension_projection = nn.Sequential(
-            nn.Linear(d_model, t5_d_model),
-            nn.GELU(),
-            nn.LayerNorm(t5_d_model)
-        )
-
-        # Expose generation config for Seq2SeqTrainer
-        self.generation_config = self.t5.generation_config
-
-    def forward(self, input_features, attention_mask=None, labels=None, decoder_attention_mask=None, **kwargs):
-        # Extract visual sequence representation
-        # outputs shape: (batch, seq_len // 2, d_model)
-        outputs, downsampled_mask = self.encoder(input_features, attention_mask=attention_mask)
-        
-        # Project dimensions using the MLP bridge
-        outputs = self.dimension_projection(outputs)
-        
-        # Pass visual embeddings directly as T5 encoder output hidden states
-        encoder_outputs = BaseModelOutput(last_hidden_state=outputs)
-        
-        # T5 expects 1/True for valid, 0/False for padding frames
-        t5_attention_mask = None
-        if downsampled_mask is not None:
-            t5_attention_mask = (~downsampled_mask).long()
-            # Force the first token to be active to prevent cross-attention NaNs inside T5
-            t5_attention_mask[:, 0] = 1
-        
-        # Run T5 Decoder forward pass
-        return self.t5(
-            encoder_outputs=encoder_outputs,
-            attention_mask=t5_attention_mask,
-            labels=labels,
-            decoder_attention_mask=decoder_attention_mask
-        )
-
-    def generate(self, input_features, attention_mask=None, **kwargs):
-        """
-        Overrides generate to enable visual-to-text sequence generation.
-        Used during evaluation/inference.
-        """
-        with torch.no_grad():
-            outputs, downsampled_mask = self.encoder(input_features, attention_mask=attention_mask)
-            outputs = self.dimension_projection(outputs)
-            encoder_outputs = BaseModelOutput(last_hidden_state=outputs)
-            
-            # T5 expects 1/True for valid, 0/False for padding frames
-            t5_attention_mask = None
-            if downsampled_mask is not None:
-                t5_attention_mask = (~downsampled_mask).long()
-                t5_attention_mask[:, 0] = 1
-            
-            # Clean kwargs that are not accepted by T5's generate method
-            kwargs.pop('file_ids', None)
-            kwargs.pop('labels', None)
-            kwargs.pop('decoder_attention_mask', None)
-            
-            # Use T5's auto-regressive generation
-            return self.t5.generate(
-                encoder_outputs=encoder_outputs,
-                attention_mask=t5_attention_mask,
-                bos_token_id=self.t5.config.decoder_start_token_id,
-                **kwargs
-            )
-
-    def state_dict(self, *args, destination=None, prefix='', keep_vars=False):
-        """
-        Overrides state_dict to clone all tensors, preventing safetensors from raising
-        a RuntimeError about shared memory tensors (like T5 embed_tokens/shared weights).
-        """
-        sd = super().state_dict(*args, destination=destination, prefix=prefix, keep_vars=keep_vars)
-        # Clone to prevent shared parameter issues in safetensors
-        cloned_sd = OrderedDict((k, v.clone()) for k, v in sd.items())
-        if destination is not None:
-            destination.clear()
-            destination.update(cloned_sd)
-            return destination
-        return cloned_sd
-
-    def gradient_checkpointing_enable(self, **kwargs):
-        """
-        Delegates gradient checkpointing to the T5 module.
-        Required by Seq2SeqTrainer when gradient_checkpointing=True is set.
-        """
-        self.t5.gradient_checkpointing_enable(**kwargs)
-
-    def gradient_checkpointing_disable(self):
-        """
-        Delegates disabling of gradient checkpointing to the T5 module.
-        """
-        self.t5.gradient_checkpointing_disable()
+from src.models.translation_model import ASLTranslationModel
+from src.utils.metadata import load_metadata
+from src.utils.splits import split_by_signer
 
 def main():
-    import argparse
     parser = argparse.ArgumentParser(description="Train ASL Landmark to English translation model.")
     parser.add_argument("--data_dir", type=str, default="data/landmarks", help="Path to landmark .npz directory")
     parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
@@ -154,95 +45,7 @@ def main():
     tokenizer = T5TokenizerFast.from_pretrained(t5_model_name)
 
     # 2. Setup metadata mapping and signer info
-    metadata = {}
-    video_to_signer = {}
-    
-    if args.metadata_file:
-        import pandas as pd
-        import glob
-        print(f"Loading metadata from {args.metadata_file}")
-        
-        # If metadata_file matches a split (e.g. "_train.csv"), merge all splits dynamically
-        if '_train.' in args.metadata_file or '_val.' in args.metadata_file or '_test.' in args.metadata_file:
-            dir_name = os.path.dirname(args.metadata_file)
-            base_name = os.path.basename(args.metadata_file)
-            
-            # Identify wildcard pattern
-            wildcard = base_name
-            for term in ['_train', '_val', '_test']:
-                if term in base_name:
-                    wildcard = base_name.replace(term, '_*')
-                    break
-            pattern = os.path.join(dir_name, wildcard)
-            csv_files = sorted(glob.glob(pattern))
-            print(f"Detected split manifests. Merging: {csv_files}")
-            
-            dfs = []
-            for f_path in csv_files:
-                sep = '\t' if 'realigned' in f_path else None
-                dfs.append(pd.read_csv(f_path, sep=sep, engine='python'))
-            df = pd.concat(dfs, ignore_index=True)
-        else:
-            if args.metadata_file.endswith('.tsv') or args.metadata_file.endswith('.txt'):
-                df = pd.read_csv(args.metadata_file, sep=None, engine='python')
-            else:
-                sep = '\t' if 'realigned' in args.metadata_file else ','
-                df = pd.read_csv(args.metadata_file, sep=sep)
-            
-        # Detect appropriate identifier and label columns dynamically
-        file_candidates = [c for c in df.columns if any(x in c.lower() for x in ['id', 'file', 'video', 'key', 'name'])]
-        
-        # Sort candidates to prefer segment/sentence/file specific names/IDs
-        def file_col_priority(col):
-            c_low = col.lower()
-            if 'sentence' in c_low and 'name' in c_low:
-                return 0
-            if 'segment' in c_low and 'name' in c_low:
-                return 1
-            if 'file' in c_low and 'name' in c_low:
-                return 2
-            if 'sentence' in c_low and 'id' in c_low:
-                return 3
-            if 'segment' in c_low and 'id' in c_low:
-                return 4
-            if 'file' in c_low and 'id' in c_low:
-                return 5
-            if 'name' in c_low and 'video' not in c_low:
-                return 6
-            if 'id' in c_low and 'video' not in c_low:
-                return 7
-            if 'video' in c_low:
-                return 8
-            return 9
-            
-        file_candidates.sort(key=file_col_priority)
-        file_col = file_candidates
-        
-        # Target/Text column: matches text, trans, gloss, sentence, caption, but NOT key/id/file/video/name words
-        text_col = [c for c in df.columns if any(x in c.lower() for x in ['text', 'trans', 'gloss', 'sentence', 'caption'])
-                    and not any(x in c.lower() for x in ['id', 'key', 'file', 'video', 'name'])]
-        signer_col = [c for c in df.columns if any(x in c.lower() for x in ['signer', 'channel', 'uploader', 'author', 'subject'])]
-        
-        if file_col and text_col:
-            f_col = file_col[0]
-            t_col = text_col[0]
-            print(f"Mapping columns: File ID '{f_col}' -> Text '{t_col}'")
-            metadata = dict(zip(df[f_col].astype(str), df[t_col].astype(str)))
-            if signer_col:
-                s_col = signer_col[0]
-                print(f"Mapping signer ID column: '{s_col}'")
-                video_to_signer = dict(zip(df[f_col].astype(str), df[s_col].astype(str)))
-        else:
-            raise ValueError(f"Could not find matching columns. Columns: {df.columns.tolist()}")
-    else:
-        print("Warning: No metadata_file provided. Falling back to mock metadata.")
-        metadata = {
-            'signer01_video_0000': "hello",
-            'signer01_video_0001': "please thank you",
-            'signer01_video_0002': "good morning",
-            'signer03_video_0003': "how are you",
-            'signer01_video_0004': "sign language"
-        }
+    metadata, video_to_signer = load_metadata(args.metadata_file)
 
     # 3. Create complete Dataset to extract file list
     include_face = not args.no_face
@@ -258,80 +61,7 @@ def main():
         raise ValueError(f"No landmark files found in {args.data_dir}. Verify path.")
 
     # 4. Partition files strictly by Signer ID (Signer-Independent splits)
-    from collections import defaultdict
-    signer_groups = defaultdict(list)
-    unknown_files = []
-    
-    for filepath in full_dataset.filepaths:
-        basename = os.path.splitext(os.path.basename(filepath))[0]
-        signer_id = None
-        
-        # Try to retrieve signer from metadata mapping
-        if basename in video_to_signer:
-            signer_id = str(video_to_signer[basename]).strip()
-            
-        # Try to infer from filename prefix (e.g. "signer01_video_0000" -> "signer01")
-        if not signer_id:
-            parts = basename.split('_')
-            if len(parts) > 1 and (parts[0].isalnum() or 'signer' in parts[0].lower() or 'channel' in parts[0].lower()):
-                signer_id = parts[0]
-                
-        if signer_id and signer_id.lower() != 'unknown':
-            signer_groups[signer_id].append(filepath)
-        else:
-            unknown_files.append(filepath)
-            
-    sorted_signers = sorted(list(signer_groups.keys()))
-    train_files = []
-    val_files = []
-    
-    if len(sorted_signers) > 0:
-        total_known_count = sum(len(signer_groups[s]) for s in sorted_signers)
-        
-        # Sort signers by dataset size descending to make the split more balanced
-        sorted_signers_by_size = sorted(sorted_signers, key=lambda s: len(signer_groups[s]), reverse=True)
-        
-        for signer in sorted_signers_by_size:
-            files = signer_groups[signer]
-            # Greedily allocate signers to train/val to keep ratios close to 80/20,
-            # ensuring validation doesn't end up empty or heavily starved.
-            if len(train_files) == 0 or (len(train_files) + len(files)) / total_known_count <= 0.85:
-                train_files.extend(files)
-            else:
-                val_files.extend(files)
-                
-        # Drop unknown-signer files from validation/evaluation entirely to prevent leakage
-        train_files.extend(unknown_files)
-        
-        # Safeguard: if there is only 1 signer or val_files is empty, split train_files to populate it
-        if len(val_files) == 0 and len(train_files) > 1:
-            print("\nWARNING: Signer-based split left validation set empty. Splitting train files 80/20 to populate validation.")
-            import random
-            # Use deterministic seed for reproducibility
-            rng = random.Random(42)
-            shuffled_train = list(train_files)
-            rng.shuffle(shuffled_train)
-            split_idx = int(0.8 * len(shuffled_train))
-            train_files = shuffled_train[:split_idx]
-            val_files = shuffled_train[split_idx:]
-            
-        print(f"Signer splits: {len(train_files)} train (includes {len(unknown_files)} unknown-signer clips), {len(val_files)} validation files.")
-    else:
-        # Fallback to standard random split if no signer proxy info is available
-        print("\n" + "="*80)
-        print("WARNING: No signer, channel, or uploader metadata found in filenames or CSV columns.")
-        print("Falling back to standard random split. Note: validation metrics may suffer from signer data leakage.")
-        print("="*80 + "\n")
-        
-        all_files = full_dataset.filepaths
-        import random
-        random.seed(42)
-        shuffled = list(all_files)
-        random.shuffle(shuffled)
-        split_idx = int(0.8 * len(shuffled))
-        train_files = shuffled[:split_idx]
-        val_files = shuffled[split_idx:]
-        print(f"Fallback splits: {len(train_files)} train, {len(val_files)} validation files.")
+    train_files, val_files = split_by_signer(full_dataset.filepaths, video_to_signer)
         
     train_dataset = ASLLandmarkDataset(
         data_dir=args.data_dir,
@@ -374,7 +104,7 @@ def main():
     total_training_steps = steps_per_epoch * args.epochs
     warmup_steps = int(0.1 * total_training_steps)
 
-    # 6. Define Seq2Seq Training Arguments
+    # 7. Define Seq2Seq Training Arguments
     training_args = Seq2SeqTrainingArguments(
         output_dir=args.output_dir,
         num_train_epochs=args.epochs,
@@ -383,15 +113,18 @@ def main():
         learning_rate=args.lr,
         weight_decay=0.01,
         logging_dir=os.path.join(args.output_dir, "logs"),
-        logging_steps=1,
+        logging_steps=10,             # Updated to 10 per requirements
         eval_strategy="epoch",
         save_strategy="epoch",
         save_total_limit=3,          # Limits checkpoints to keep only the 3 most recent, preventing disk overflow
         predict_with_generate=True,  # Enables generating actual text during eval
+        generation_max_length=30,    # Added per requirements
         fp16=torch.cuda.is_available(), # Use mixed precision if GPU available
         report_to="none",  # Prevents wandb prompts on Kaggle
         remove_unused_columns=False,
         warmup_steps=warmup_steps,    # Dynamic warmup steps to stabilize training early
+        load_best_model_at_end=True,  # Added per requirements
+        metric_for_best_model="wer",  # Added per requirements
         
         # --- Performance & Memory Enhancements ---
         optim="adafactor",                  # Native T5 optimizer, saves massive VRAM
@@ -400,15 +133,14 @@ def main():
         dataloader_pin_memory=True          # Accelerates CPU-to-GPU data transfers
     )
 
-    # 7. Define metrics computation
-    import numpy as np
-    import jiwer
-    import sacrebleu
-
+    # 8. Define metrics computation
     def compute_metrics(eval_preds):
         preds, labels = eval_preds
         if isinstance(preds, tuple):
             preds = preds[0]
+        
+        # Filter -100 from predictions before decoding
+        preds = np.where(preds != -100, preds, tokenizer.pad_token_id)
         
         # Replace -100 in labels so they can be decoded
         labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
@@ -432,7 +164,7 @@ def main():
             "wer": float(wer)
         }
 
-    # 8. Initialize Trainer
+    # 9. Initialize Trainer
     trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
@@ -440,14 +172,14 @@ def main():
         eval_dataset=val_dataset,
         data_collator=collate_fn,
         processing_class=tokenizer,
-        compute_metrics=compute_metrics
+        compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)] # Added per requirements
     )
 
-    # 8. Start Training Loop
+    # 10. Start Training Loop
     print("\nStarting training loop...")
     resume_path = args.resume_from_checkpoint
     if resume_path == "latest":
-        import glob
         # Auto-detect latest checkpoint under output_dir
         checkpoint_dirs = sorted(glob.glob(os.path.join(args.output_dir, "checkpoint-*")), key=lambda x: int(x.split("-")[-1]))
         resume_path = checkpoint_dirs[-1] if checkpoint_dirs else None

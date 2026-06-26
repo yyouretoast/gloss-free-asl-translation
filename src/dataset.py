@@ -1,16 +1,27 @@
+from __future__ import annotations
 import os
-import glob
-import json
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from typing import Dict, List, Optional, Any, Union
+
+from src.utils.io_utils import discover_landmark_paths, load_openpose_directory
 
 class ASLLandmarkDataset(Dataset):
     """
     A PyTorch Dataset that loads pre-extracted landmark files (.npz)
     and maps them to target English text labels.
     """
-    def __init__(self, data_dir, metadata_dict=None, file_list=None, max_len=150, include_face=True, normalize=True):
+    def __init__(
+        self, 
+        data_dir: str, 
+        metadata_dict: Optional[Dict[str, str]] = None, 
+        file_list: Optional[List[str]] = None, 
+        max_len: int = 150, 
+        include_face: bool = True, 
+        normalize: bool = True,
+        skip_empty_labels: bool = True
+    ):
         """
         Args:
             data_dir (str): Directory containing .npz files.
@@ -22,6 +33,7 @@ class ASLLandmarkDataset(Dataset):
                                  210 dims for OpenPose) with manual landmarks (258 dims for MediaPipe, 
                                  201 dims for OpenPose) for a total of 534 or 411 dims respectively.
             normalize (bool): If True, applies frame-level geometric normalization.
+            skip_empty_labels (bool): If True, filters out files that have empty labels.
         """
         self.data_dir = data_dir
         self.metadata_dict = metadata_dict if metadata_dict is not None else {}
@@ -32,32 +44,35 @@ class ASLLandmarkDataset(Dataset):
         if file_list is not None:
             self.filepaths = file_list
         else:
-            self.filepaths = glob.glob(os.path.join(data_dir, "*.npz"))
-            # If no .npz files are found, dynamically resolve OpenPose JSON folders
-            if len(self.filepaths) == 0:
-                candidates = [
-                    data_dir,
-                    os.path.join(data_dir, "train_2D_keypoints/openpose_output/json"),
-                    os.path.join(data_dir, "openpose_output/json")
-                ]
-                for cand in candidates:
-                    if os.path.exists(cand):
-                        subdirs = [os.path.join(cand, d) for d in os.listdir(cand) if os.path.isdir(os.path.join(cand, d))]
-                        if subdirs:
-                            # Quick check if the first folder contains json files to confirm it's OpenPose structure
-                            first_sub = subdirs[0]
-                            if glob.glob(os.path.join(first_sub, "*.json")):
-                                self.filepaths = subdirs
-                                break
+            self.filepaths = discover_landmark_paths(data_dir)
         
         if len(self.filepaths) == 0:
             import warnings
             warnings.warn(f"No landmark files (.npz) or OpenPose folders found in '{data_dir}'.")
+            
+        # Filter out samples with missing labels to avoid wasting training compute
+        if self.metadata_dict and skip_empty_labels:
+            missing_count = 0
+            valid_filepaths = []
+            for fp in self.filepaths:
+                basename = os.path.splitext(os.path.basename(fp))[0]
+                if not self.metadata_dict.get(basename, "").strip():
+                    missing_count += 1
+                else:
+                    valid_filepaths.append(fp)
+            
+            if missing_count > 0:
+                import warnings
+                warnings.warn(
+                    f"{missing_count}/{len(self.filepaths)} samples have empty labels "
+                    f"and will be skipped to avoid contributing zero loss during training."
+                )
+            self.filepaths = valid_filepaths
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.filepaths)
 
-    def _normalize_landmarks(self, pose, left_hand, right_hand, face):
+    def _normalize_landmarks(self, pose: np.ndarray, left_hand: np.ndarray, right_hand: np.ndarray, face: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Normalizes landmark coordinates:
         - Pose: centered relative to mid-shoulder, scaled by shoulder width.
@@ -87,7 +102,9 @@ class ASLLandmarkDataset(Dataset):
         shoulder_width = np.expand_dims(shoulder_width, axis=1)  # (num_frames, 1, 1)
         
         # Avoid coordinate explosion when shoulder width is too small (e.g. tracking failure)
-        # by falling back to a sensible unit scale (0.25) instead of near-zero values.
+        # Use 0.05 threshold (not 0.01) to catch near-failure tracking, and fall back
+        # to a fixed 0.25 scale (approximate normalized shoulder width) rather than
+        # the near-zero value, to prevent coordinate explosion.
         shoulder_width = np.where(shoulder_width < 0.05, 0.25, shoulder_width)
         
         norm_pose_spatial = (pose_spatial - mid_shoulder) / shoulder_width
@@ -115,68 +132,30 @@ class ASLLandmarkDataset(Dataset):
         
         return norm_pose, norm_left_hand, norm_right_hand, norm_face
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
         file_path = self.filepaths[idx]
         basename = os.path.splitext(os.path.basename(file_path))[0]
         
         # Load landmarks (handling both .npz files and directories of OpenPose JSONs)
         if os.path.isdir(file_path):
-            json_files = sorted(glob.glob(os.path.join(file_path, "*.json")))
-            num_frames = len(json_files)
-            
-            if num_frames == 0:
-                raise ValueError(f"OpenPose JSON folder {file_path} contains 0 frames.")
-                
-            pose_list, left_hand_list, right_hand_list, face_list = [], [], [], []
-            
-            for jf in json_files:
-                try:
-                    with open(jf, 'r') as f:
-                        data = json.load(f)
-                    
-                    people = data.get('people', [])
-                    if people:
-                        p = people[0]
-                        # OpenPose: pose has 75 features, face has 210, hands have 63
-                        pose_raw = p.get('pose_keypoints_2d', [])
-                        pose_arr = np.array(pose_raw).reshape(25, 3) if len(pose_raw) == 75 else np.zeros((25, 3))
-                        
-                        face_raw = p.get('face_keypoints_2d', [])
-                        face_arr = np.array(face_raw).reshape(70, 3) if len(face_raw) == 210 else np.zeros((70, 3))
-                        
-                        lh_raw = p.get('hand_left_keypoints_2d', [])
-                        lh_arr = np.array(lh_raw).reshape(21, 3) if len(lh_raw) == 63 else np.zeros((21, 3))
-                        
-                        rh_raw = p.get('hand_right_keypoints_2d', [])
-                        rh_arr = np.array(rh_raw).reshape(21, 3) if len(rh_raw) == 63 else np.zeros((21, 3))
-                    else:
-                        pose_arr = np.zeros((25, 3))
-                        face_arr = np.zeros((70, 3))
-                        lh_arr = np.zeros((21, 3))
-                        rh_arr = np.zeros((21, 3))
-                        
-                    pose_list.append(pose_arr)
-                    face_list.append(face_arr)
-                    left_hand_list.append(lh_arr)
-                    right_hand_list.append(rh_arr)
-                except Exception as e:
-                    raise IOError(f"Failed to read OpenPose file {jf}: {e}")
-                    
-            pose = np.stack(pose_list, axis=0)
-            left_hand = np.stack(left_hand_list, axis=0)
-            right_hand = np.stack(right_hand_list, axis=0)
-            face = np.stack(face_list, axis=0)
+            landmarks = load_openpose_directory(file_path)
+            pose = landmarks['pose']
+            left_hand = landmarks['left_hand']
+            right_hand = landmarks['right_hand']
+            face = landmarks['face']
+            num_frames = pose.shape[0]
         else:
             try:
-                data = np.load(file_path)
-                pose = data['pose']          # shape (num_frames, 33, 4)
-                left_hand = data['left_hand']  # shape (num_frames, 21, 3)
-                right_hand = data['right_hand'] # shape (num_frames, 21, 3)
-                face = data['face']          # shape (num_frames, 92, 3)
+                with np.load(file_path) as data:
+                    pose = data['pose']          # shape (num_frames, 33, 4)
+                    left_hand = data['left_hand']  # shape (num_frames, 21, 3)
+                    right_hand = data['right_hand'] # shape (num_frames, 21, 3)
+                    face = data['face']          # shape (num_frames, 92, 3)
             except Exception as e:
                 raise IOError(f"Failed to load landmark file {file_path}: {e}")
                 
             num_frames = pose.shape[0]
+            
         if num_frames == 0:
             raise ValueError(f"Landmark file {file_path} contains 0 frames. Corrupt sequence.")
 
@@ -217,7 +196,7 @@ class CollateLandmarks:
     """
     Collate function to pad variable-length landmark sequences and target texts into batches.
     """
-    def __init__(self, tokenizer=None, max_target_len=30):
+    def __init__(self, tokenizer: Any = None, max_target_len: int = 30):
         """
         Args:
             tokenizer: Pretrained Hugging Face tokenizer (e.g. T5Tokenizer) to convert text to IDs.
@@ -226,7 +205,7 @@ class CollateLandmarks:
         self.tokenizer = tokenizer
         self.max_target_len = max_target_len
 
-    def __call__(self, batch):
+    def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         # Extract features and texts
         features = [item['features'] for item in batch]
         texts = [item['text'] for item in batch]

@@ -1,9 +1,11 @@
+"""Profiles memory usage for the ASL Translation model on CPU/GPU."""
+from __future__ import annotations
 import os
 import sys
 import torch
 from transformers import T5Config, T5ForConditionalGeneration
 
-def profile_model_memory(model_name='t5-small', batch_size=8, seq_len=150, target_len=30, d_model=512):
+def profile_model_memory(model_name: str = 't5-small', batch_size: int = 8, seq_len: int = 150, target_len: int = 30, d_model: int = 512) -> None:
     """
     Profiles CPU/GPU memory usage for the T5 decoder forward and backward pass.
     """
@@ -71,7 +73,7 @@ def profile_model_memory(model_name='t5-small', batch_size=8, seq_len=150, targe
     if device.type == 'cuda':
         torch.cuda.empty_cache()
 
-def main():
+def main() -> None:
     # Profile t5-small (d_model=512)
     profile_model_memory(model_name='t5-small', batch_size=8, seq_len=150, target_len=30, d_model=512)
     

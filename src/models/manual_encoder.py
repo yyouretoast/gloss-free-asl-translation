@@ -1,12 +1,17 @@
+"""ASL Translation model components."""
+from __future__ import annotations
+from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 
 class FeedForwardModule(nn.Module):
     """
     Feed Forward Module (FFN) with half-step residual connection (Macaron style).
     """
-    def __init__(self, d_model, expansion_factor=4, dropout=0.1):
+    def __init__(self, d_model: int, expansion_factor: int = 4, dropout: float = 0.1):
         super().__init__()
         self.ln = nn.LayerNorm(d_model)
         self.w_1 = nn.Linear(d_model, d_model * expansion_factor)
@@ -14,7 +19,13 @@ class FeedForwardModule(nn.Module):
         self.w_2 = nn.Linear(d_model * expansion_factor, d_model)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch, seq_len, d_model).
+        Returns:
+            Output tensor of shape (batch, seq_len, d_model).
+        """
         residual = x
         x = self.ln(x)
         x = self.w_1(x)
@@ -29,7 +40,7 @@ class ConformerConvModule(nn.Module):
     """
     Convolution Module inside the Conformer block.
     """
-    def __init__(self, d_model, kernel_size=31, dropout=0.1):
+    def __init__(self, d_model: int, kernel_size: int = 31, dropout: float = 0.1):
         super().__init__()
         # Depthwise separable convolution setup
         # Input shape expected: (batch, channels, seq_len)
@@ -53,7 +64,14 @@ class ConformerConvModule(nn.Module):
         self.pointwise_conv2 = nn.Conv1d(d_model, d_model, kernel_size=1)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, key_padding_mask=None):
+    def forward(self, x: torch.Tensor, key_padding_mask: Optional[torch.BoolTensor] = None) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch, seq_len, d_model).
+            key_padding_mask: Boolean mask of shape (batch, seq_len), True for padded positions.
+        Returns:
+            Output tensor of shape (batch, seq_len, d_model).
+        """
         # x shape: (batch, seq_len, d_model)
         residual = x
         x = self.ln(x)
@@ -72,9 +90,6 @@ class ConformerConvModule(nn.Module):
         x = x.transpose(1, 2)
         x = self.conv_norm(x)
         
-        if key_padding_mask is not None:
-            x = x.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
-            
         x = x.transpose(1, 2)
         
         x = self.act(x)
@@ -91,15 +106,26 @@ class ConformerConvModule(nn.Module):
 
 class ConformerAttentionModule(nn.Module):
     """
-    Multi-Head Self-Attention Module with positional bias.
+    Multi-Head Self-Attention Module.
+
+    Note: Uses absolute sinusoidal positional encoding added before the Conformer blocks,
+    rather than the relative sinusoidal positional encoding described in Gulati et al. (2020).
+    This is a deliberate simplification for implementation tractability.
     """
-    def __init__(self, d_model, num_heads=4, dropout=0.1):
+    def __init__(self, d_model: int, num_heads: int = 4, dropout: float = 0.1):
         super().__init__()
         self.ln = nn.LayerNorm(d_model)
         self.attn = nn.MultiheadAttention(embed_dim=d_model, num_heads=num_heads, dropout=dropout, batch_first=True)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, key_padding_mask=None):
+    def forward(self, x: torch.Tensor, key_padding_mask: Optional[torch.BoolTensor] = None) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch, seq_len, d_model).
+            key_padding_mask: Boolean mask of shape (batch, seq_len), True for padded positions.
+        Returns:
+            Output tensor of shape (batch, seq_len, d_model).
+        """
         # x shape: (batch, seq_len, d_model)
         residual = x
         x = self.ln(x)
@@ -122,7 +148,7 @@ class ConformerBlock(nn.Module):
     """
     A single Gulati-style Conformer Block.
     """
-    def __init__(self, d_model, num_heads=4, kernel_size=31, expansion_factor=4, dropout=0.1):
+    def __init__(self, d_model: int, num_heads: int = 4, kernel_size: int = 31, expansion_factor: int = 4, dropout: float = 0.1):
         super().__init__()
         self.ffn1 = FeedForwardModule(d_model, expansion_factor, dropout)
         self.attn = ConformerAttentionModule(d_model, num_heads, dropout)
@@ -130,22 +156,21 @@ class ConformerBlock(nn.Module):
         self.ffn2 = FeedForwardModule(d_model, expansion_factor, dropout)
         self.final_ln = nn.LayerNorm(d_model)
 
-    def forward(self, x, key_padding_mask=None):
+    def forward(self, x: torch.Tensor, key_padding_mask: Optional[torch.BoolTensor] = None) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch, seq_len, d_model).
+            key_padding_mask: Boolean mask of shape (batch, seq_len), True for padded positions.
+        Returns:
+            Output tensor of shape (batch, seq_len, d_model).
+        """
         # Macaron-style sandwich structure
         x = self.ffn1(x)
-        if key_padding_mask is not None:
-            x = x.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
-            
         x = self.attn(x, key_padding_mask=key_padding_mask)
-        if key_padding_mask is not None:
-            x = x.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
-            
         x = self.conv(x, key_padding_mask=key_padding_mask)
-        if key_padding_mask is not None:
-            x = x.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
-            
         x = self.ffn2(x)
         x = self.final_ln(x)
+        
         if key_padding_mask is not None:
             x = x.masked_fill(key_padding_mask.unsqueeze(-1), 0.0)
             
@@ -155,7 +180,7 @@ class PositionalEncoding(nn.Module):
     """
     Sinusoidal Positional Encoding for sequence temporal awareness.
     """
-    def __init__(self, d_model, max_len=10000):
+    def __init__(self, d_model: int, max_len: int = 10000):
         super().__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
@@ -171,7 +196,13 @@ class PositionalEncoding(nn.Module):
         # Register as buffer so it moves with the model device
         self.register_buffer('pe', pe.unsqueeze(0))
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch, seq_len, d_model).
+        Returns:
+            Output tensor of shape (batch, seq_len, d_model).
+        """
         # x shape: (batch, seq_len, d_model)
         return x + self.pe[:, :x.size(1)]
 
@@ -180,7 +211,7 @@ class ConformerEncoder(nn.Module):
     Complete Conformer Encoder with spatial projection, positional encoding,
     conformer blocks, and temporal downsampling.
     """
-    def __init__(self, input_dim=534, d_model=512, num_layers=4, num_heads=4, kernel_size=31, dropout=0.1):
+    def __init__(self, input_dim: int = 534, d_model: int = 512, num_layers: int = 4, num_heads: int = 4, kernel_size: int = 31, dropout: float = 0.1):
         super().__init__()
         # 1. Feature Projection Layer
         self.projection = nn.Sequential(
@@ -215,11 +246,15 @@ class ConformerEncoder(nn.Module):
             for _ in range(num_layers - (num_layers // 2))
         ])
         
-    def forward(self, x, attention_mask=None):
+    def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Optional[torch.BoolTensor]]:
         """
         Args:
             x (Tensor): Landmark features of shape (batch, seq_len, input_dim).
             attention_mask (Tensor): Mask of shape (batch, seq_len) with 1 for real frames, 0 for pad.
+        Returns:
+            Tuple of:
+                - Output tensor of shape (batch, seq_len // 2, d_model)
+                - Downsampled boolean padding mask of shape (batch, seq_len // 2)
         """
         # Guard against completely empty sequence length input
         if x.size(1) == 0:
@@ -246,11 +281,12 @@ class ConformerEncoder(nn.Module):
         x = self.downsample(x)
         x = x.transpose(1, 2)
         
-        # Downsample the attention mask/padding mask as well
+        # Downsample the attention mask/padding mask as well using max_pool1d to respect receptive field
         downsampled_mask = None
         if key_padding_mask is not None:
-            # Slices every 2nd index along seq_len to match Conv1d stride=2
-            downsampled_mask = key_padding_mask[:, ::2]
+            valid_mask = (~key_padding_mask).float().unsqueeze(1)  # (B, 1, L)
+            downsampled_valid = F.max_pool1d(valid_mask, kernel_size=3, stride=2, padding=1)
+            downsampled_mask = (downsampled_valid.squeeze(1) < 0.5)
             # Ensure sequence length alignment (handles stride boundary)
             downsampled_mask = downsampled_mask[:, :x.size(1)]
                 

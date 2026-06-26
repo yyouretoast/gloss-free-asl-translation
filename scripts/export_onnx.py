@@ -1,12 +1,22 @@
+"""Exports the Conformer Encoder component to ONNX for fast inference."""
+from __future__ import annotations
 import os
-import sys
+import argparse
 import torch
+import onnx
+from typing import Optional
 
-# Add the project root to path so we can import src modules
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.train import ASLTranslationModel
 
-def export_encoder_to_onnx(model_path=None, output_onnx_path="results/conformer_encoder.onnx", input_dim=534):
+def export_encoder_to_onnx(
+    model_path: Optional[str] = None, 
+    output_onnx_path: str = "results/conformer_encoder.onnx", 
+    input_dim: int = 534,
+    d_model: int = 512,
+    num_layers: int = 4,
+    num_heads: int = 4,
+    kernel_size: int = 31
+) -> None:
     """
     Exports only the Conformer Encoder part of our ASL translation model to ONNX.
     This bypasses the T5 Decoder's auto-regressive generation loop, which cannot
@@ -15,16 +25,18 @@ def export_encoder_to_onnx(model_path=None, output_onnx_path="results/conformer_
     print(f"Initializing model for ONNX export (input_dim={input_dim})...")
     model = ASLTranslationModel(
         input_dim=input_dim,
-        d_model=512,
-        num_layers=4,
-        num_heads=4,
-        kernel_size=31
+        d_model=d_model,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        kernel_size=kernel_size
     )
     
     # Load weights if path is provided
-    if model_path and os.path.exists(model_path):
+    if model_path:
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model path {model_path} does not exist.")
         print(f"Loading weights from {model_path}...")
-        state_dict = torch.load(model_path, map_location='cpu')
+        state_dict = torch.load(model_path, map_location='cpu', weights_only=True)
         model.load_state_dict(state_dict)
     
     # Extract only the encoder module
@@ -54,24 +66,33 @@ def export_encoder_to_onnx(model_path=None, output_onnx_path="results/conformer_
             'downsampled_mask': {0: 'batch_size', 1: 'downsampled_sequence_length'}
         }
     )
-    print("ONNX export completed successfully!")
+    
+    # Validate the generated ONNX model
+    print("Validating the exported ONNX model...")
+    onnx.checker.check_model(output_onnx_path)
+    print("ONNX export and validation completed successfully!")
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Export ASL Conformer Encoder to ONNX.")
+    parser.add_argument("--model-path", type=str, default=None, help="Path to trained PyTorch model weights.")
+    parser.add_argument("--output", type=str, default="results/conformer_encoder.onnx", help="Output path for ONNX model.")
+    parser.add_argument("--input-dim", type=int, default=534, help="Input feature dimension.")
+    parser.add_argument("--d-model", type=int, default=512, help="Conformer embedding dimension.")
+    parser.add_argument("--num-layers", type=int, default=4, help="Number of Conformer blocks.")
+    parser.add_argument("--num-heads", type=int, default=4, help="Number of attention heads.")
+    parser.add_argument("--kernel-size", type=int, default=31, help="Conformer conv kernel size.")
+    
+    args = parser.parse_args()
+    
+    export_encoder_to_onnx(
+        model_path=args.model_path,
+        output_onnx_path=args.output,
+        input_dim=args.input_dim,
+        d_model=args.d_model,
+        num_layers=args.num_layers,
+        num_heads=args.num_heads,
+        kernel_size=args.kernel_size
+    )
 
 if __name__ == "__main__":
-    # Usage: python scripts/export_onnx.py [input_dim] [model_path] [output_onnx_path]
-    input_dim = 534
-    model_path = None
-    output_onnx_path = "results/conformer_encoder.onnx"
-    
-    if len(sys.argv) > 1:
-        try:
-            input_dim = int(sys.argv[1])
-        except ValueError:
-            pass
-            
-    if len(sys.argv) > 2:
-        model_path = sys.argv[2]
-        
-    if len(sys.argv) > 3:
-        output_onnx_path = sys.argv[3]
-            
-    export_encoder_to_onnx(model_path=model_path, output_onnx_path=output_onnx_path, input_dim=input_dim)
+    main()

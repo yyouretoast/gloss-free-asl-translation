@@ -1,19 +1,25 @@
+"""Preprocesses How2Sign OpenPose JSON files into compressed .npz landmarks."""
+from __future__ import annotations
+
 import os
 import glob
+import argparse
+import sys
+import tempfile
+from pathlib import Path
+from multiprocessing import Pool, cpu_count
+from typing import Tuple
+
+import numpy as np
+from tqdm import tqdm
+
 try:
     import orjson
 except ImportError:
     orjson = None
-    try:
-        import ujson as json
-    except ImportError:
-        import json
-import numpy as np
-from multiprocessing import Pool, cpu_count
-from tqdm import tqdm
-import sys
+import json
 
-def process_single_folder(args_tuple):
+def process_single_folder(args_tuple: Tuple[str, str]) -> bool:
     input_folder, output_dir = args_tuple
     try:
         basename = os.path.basename(input_folder)
@@ -67,34 +73,44 @@ def process_single_folder(args_tuple):
         # Save as compressed npz to fit in RAM disk limits (/dev/shm)
         np.savez_compressed(output_filepath, pose=pose, left_hand=left_hand, right_hand=right_hand, face=face)
         return True
-    except Exception as e:
-        print(f"Error processing {input_folder}: {e}")
+    except (IOError, json.JSONDecodeError, KeyError, ValueError) as e:
+        print(f"Error processing {input_folder}: {e}", file=sys.stderr)
         return False
 
-def main():
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Preprocess How2Sign dataset from OpenPose JSON to .npz format.")
+    parser.add_argument("--input-dir", type=str, default=None, help="Input directory containing OpenPose JSONs.")
+    parser.add_argument("--output-dir", type=str, default=None, help="Output directory for .npz files.")
+    parser.add_argument("--workers", type=int, default=None, help="Number of CPU workers for multiprocessing.")
+    
+    args = parser.parse_args()
+
     # 1. Resolve input directory
-    input_dir = None
-    for path in [
-        '/kaggle/input/datasets/nazarboholii/how2sign',
-        '/kaggle/input/how2sign',
-        '/kaggle/input/how2sign-keypoints',
-        '/kaggle/input/datasets/nazarboholii/how2sign-keypoints'
-    ]:
-        if os.path.exists(path):
-            input_dir = path
-            break
-    else:
-        input_dir = '/kaggle/input/datasets/nazarboholii/how2sign'
-        
+    input_dir = args.input_dir
+    if not input_dir:
+        for path in [
+            '/kaggle/input/datasets/nazarboholii/how2sign',
+            '/kaggle/input/how2sign',
+            '/kaggle/input/how2sign-keypoints',
+            '/kaggle/input/datasets/nazarboholii/how2sign-keypoints'
+        ]:
+            if os.path.exists(path):
+                input_dir = path
+                break
+        else:
+            input_dir = '/kaggle/input/datasets/nazarboholii/how2sign'
+            
     json_cand = os.path.join(input_dir, "train_2D_keypoints/openpose_output/json")
     if not os.path.exists(json_cand):
-        print(f"Error: Candidate OpenPose json folder {json_cand} does not exist!")
+        print(f"Error: Candidate OpenPose json folder {json_cand} does not exist!", file=sys.stderr)
         sys.exit(1)
         
-    # 2. Resolve output directory (default to /tmp/how2sign_npz to avoid 2GB /dev/shm limit on Kaggle)
-    output_dir = "/tmp/how2sign_npz"
-    if len(sys.argv) > 1:
-        output_dir = sys.argv[1]
+    # 2. Resolve output directory 
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        output_dir = str(Path(tempfile.gettempdir()) / 'how2sign_npz')
+        
     os.makedirs(output_dir, exist_ok=True)
     
     # 3. List folders to process
@@ -112,7 +128,7 @@ def main():
     tasks = [(f, output_dir) for f in folders]
     
     # 4. Process in parallel using a CPU pool
-    num_workers = min(cpu_count(), 4)
+    num_workers = args.workers if args.workers else min(cpu_count(), 4)
     print(f"Processing in parallel using {num_workers} CPU workers...")
     
     success_count = 0

@@ -1,8 +1,10 @@
+from __future__ import annotations
 import cv2
 import mediapipe as mp
 import numpy as np
 import os
 from tqdm import tqdm
+from typing import Dict
 
 class ASLLandmarkExtractor:
     """
@@ -10,13 +12,21 @@ class ASLLandmarkExtractor:
     It separates the manual features (hands + pose) and non-manual features (face mesh)
     and handles missing detections by zero-padding.
     """
-    def __init__(self, model_complexity=1, min_detection_confidence=0.5, min_tracking_confidence=0.5):
+    def __init__(self, model_complexity: int = 1, min_detection_confidence: float = 0.5, min_tracking_confidence: float = 0.5):
         self.mp_holistic = mp.solutions.holistic
         self.model_complexity = model_complexity
         self.min_detection_confidence = min_detection_confidence
         self.min_tracking_confidence = min_tracking_confidence
         
-        # 92 key indices for facial expression (eyes, eyebrows, mouth/lips)
+        # 92 key facial landmark indices from the MediaPipe 468-point face mesh.
+        # These target the expressive regions critical for ASL grammar:
+        # - Lips (40 points): mouth shapes for mouthing/mouth morphemes
+        # - Left eye (16 points): eye gaze and blinks  
+        # - Right eye (16 points): eye gaze and blinks
+        # - Left eyebrow (10 points): raised/furrowed brows for questions/topics
+        # - Right eyebrow (10 points): raised/furrowed brows for questions/topics
+        # Selecting this subset reduces face dimensionality by 80% (468 → 92)
+        # while preserving the features most relevant to ASL non-manual markers.
         lips = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95, 185, 40, 39, 37, 0, 267, 269, 270, 409, 415, 310, 311, 312, 13, 82, 81, 42, 183, 78]
         left_eye = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
         right_eye = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
@@ -24,7 +34,7 @@ class ASLLandmarkExtractor:
         right_eyebrow = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46]
         self.face_indices = sorted(list(set(lips + left_eye + right_eye + left_eyebrow + right_eyebrow)))
 
-    def extract_landmarks(self, video_path):
+    def extract_landmarks(self, video_path: str) -> Dict[str, np.ndarray]:
         """
         Processes a video file frame-by-frame and extracts Pose, Left Hand, Right Hand,
         and Facial Expression landmarks.
@@ -43,65 +53,72 @@ class ASLLandmarkExtractor:
             raise FileNotFoundError(f"Video file not found: {video_path}")
 
         cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise IOError(f"Failed to open video file: {video_path}")
+            
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames <= 0:
+            cap.release()
+            raise IOError(f"Video file has 0 frames or invalid format: {video_path}")
         
         pose_list = []
         left_hand_list = []
         right_hand_list = []
         face_list = []
 
-        # Initialize Holistic tracker in video stream mode
-        with self.mp_holistic.Holistic(
-            static_image_mode=False,
-            model_complexity=self.model_complexity,
-            refine_face_landmarks=False,  # Enforce standard 468 face mesh landmarks
-            min_detection_confidence=self.min_detection_confidence,
-            min_tracking_confidence=self.min_tracking_confidence
-        ) as holistic:
-            
-            pbar = tqdm(total=total_frames, desc=f"Processing {os.path.basename(video_path)}")
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+        try:
+            # Initialize Holistic tracker in video stream mode
+            with self.mp_holistic.Holistic(
+                static_image_mode=False,
+                model_complexity=self.model_complexity,
+                refine_face_landmarks=False,  # Enforce standard 468 face mesh landmarks
+                min_detection_confidence=self.min_detection_confidence,
+                min_tracking_confidence=self.min_tracking_confidence
+            ) as holistic:
+                
+                pbar = tqdm(total=total_frames, desc=f"Processing {os.path.basename(video_path)}")
+                while cap.isOpened():
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
 
-                # Convert BGR (OpenCV format) to RGB (MediaPipe format)
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = holistic.process(frame_rgb)
+                    # Convert BGR (OpenCV format) to RGB (MediaPipe format)
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    results = holistic.process(frame_rgb)
 
-                # 1. Pose landmarks (33 landmarks, 4D: x, y, z, visibility)
-                if results.pose_landmarks:
-                    pose = np.array([[lm.x, lm.y, lm.z, lm.visibility] for lm in results.pose_landmarks.landmark])
-                else:
-                    pose = np.zeros((33, 4))
-                pose_list.append(pose)
+                    # 1. Pose landmarks (33 landmarks, 4D: x, y, z, visibility)
+                    if results.pose_landmarks:
+                        pose = np.array([[lm.x, lm.y, lm.z, lm.visibility] for lm in results.pose_landmarks.landmark])
+                    else:
+                        pose = np.zeros((33, 4))
+                    pose_list.append(pose)
 
-                # 2. Left Hand landmarks (21 landmarks, 3D: x, y, z)
-                if results.left_hand_landmarks:
-                    left_hand = np.array([[lm.x, lm.y, lm.z] for lm in results.left_hand_landmarks.landmark])
-                else:
-                    left_hand = np.zeros((21, 3))
-                left_hand_list.append(left_hand)
+                    # 2. Left Hand landmarks (21 landmarks, 3D: x, y, z)
+                    if results.left_hand_landmarks:
+                        left_hand = np.array([[lm.x, lm.y, lm.z] for lm in results.left_hand_landmarks.landmark])
+                    else:
+                        left_hand = np.zeros((21, 3))
+                    left_hand_list.append(left_hand)
 
-                # 3. Right Hand landmarks (21 landmarks, 3D: x, y, z)
-                if results.right_hand_landmarks:
-                    right_hand = np.array([[lm.x, lm.y, lm.z] for lm in results.right_hand_landmarks.landmark])
-                else:
-                    right_hand = np.zeros((21, 3))
-                right_hand_list.append(right_hand)
+                    # 3. Right Hand landmarks (21 landmarks, 3D: x, y, z)
+                    if results.right_hand_landmarks:
+                        right_hand = np.array([[lm.x, lm.y, lm.z] for lm in results.right_hand_landmarks.landmark])
+                    else:
+                        right_hand = np.zeros((21, 3))
+                    right_hand_list.append(right_hand)
 
-                # 4. Face landmarks (92 expression landmarks, 3D: x, y, z)
-                if results.face_landmarks:
-                    all_face = np.array([[lm.x, lm.y, lm.z] for lm in results.face_landmarks.landmark])
-                    face = all_face[self.face_indices]
-                else:
-                    face = np.zeros((len(self.face_indices), 3))
-                face_list.append(face)
+                    # 4. Face landmarks (92 expression landmarks, 3D: x, y, z)
+                    if results.face_landmarks:
+                        all_face = np.array([[lm.x, lm.y, lm.z] for lm in results.face_landmarks.landmark])
+                        face = all_face[self.face_indices]
+                    else:
+                        face = np.zeros((len(self.face_indices), 3))
+                    face_list.append(face)
 
-                pbar.update(1)
-            pbar.close()
-
-        cap.release()
+                    pbar.update(1)
+                pbar.close()
+        finally:
+            cap.release()
 
         # Concatenate lists into arrays
         return {
@@ -112,7 +129,7 @@ class ASLLandmarkExtractor:
         }
 
     @staticmethod
-    def save_landmarks(landmarks_dict, output_path):
+    def save_landmarks(landmarks_dict: Dict[str, np.ndarray], output_path: str) -> None:
         """
         Saves the extracted landmark dictionary to a compressed .npz file.
         """
@@ -121,7 +138,7 @@ class ASLLandmarkExtractor:
         print(f"Saved landmarks to {output_path}")
 
     @staticmethod
-    def load_landmarks(file_path):
+    def load_landmarks(file_path: str) -> Dict[str, np.ndarray]:
         """
         Loads landmarks from a compressed .npz file.
         """
