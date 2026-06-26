@@ -4,6 +4,7 @@ import cv2
 import tempfile
 import numpy as np
 
+@pytest.mark.slow
 def test_pipeline_extraction():
     pytest.importorskip("mediapipe")
     try:

@@ -72,34 +72,79 @@ def process_single_folder(args_tuple: Tuple[str, str]) -> bool:
         # Save as compressed npz to fit in RAM disk limits (/dev/shm)
         np.savez_compressed(output_filepath, pose=pose, left_hand=left_hand, right_hand=right_hand, face=face)
         return True
-    except (IOError, json.JSONDecodeError, KeyError, ValueError) as e:
+    except Exception as e:
         print(f"Error processing {input_folder}: {e}", file=sys.stderr)
         return False
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Preprocess How2Sign dataset from OpenPose JSON to .npz format.")
-    parser.add_argument("--input-dir", type=str, default=None, help="Input directory containing OpenPose JSONs.")
-    parser.add_argument("--output-dir", type=str, default=None, help="Output directory for .npz files.")
+    parser.add_argument("--input-dir", "--input_dir", dest="input_dir", type=str, default=None, help="Input directory containing OpenPose JSONs.")
+    parser.add_argument("--output-dir", "--output_dir", dest="output_dir", type=str, default=None, help="Output directory for .npz files.")
     parser.add_argument("--workers", type=int, default=None, help="Number of CPU workers for multiprocessing.")
     
     args = parser.parse_args()
 
     # 1. Resolve input directory
     input_dir = args.input_dir
-    if not input_dir:
+    json_cand = None
+    
+    if input_dir:
+        # Check if the directory itself contains folders of jsons (i.e. has subdirectories that contain JSONs)
+        if os.path.isdir(input_dir):
+            try:
+                subdirs = [os.path.join(input_dir, d) for d in os.listdir(input_dir) if os.path.isdir(os.path.join(input_dir, d))]
+                has_jsons = False
+                for s in subdirs[:5]:
+                    if os.path.isdir(s) and any(f.endswith('.json') for f in os.listdir(s)):
+                        has_jsons = True
+                        break
+                if has_jsons:
+                    json_cand = input_dir
+            except Exception:
+                pass
+            
+            # If not directly containing jsons, check structured splits
+            if not json_cand:
+                for subpath in [
+                    "train_2D_keypoints/openpose_output/json",
+                    "val_2D_keypoints/openpose_output/json",
+                    "test_2D_keypoints/openpose_output/json",
+                    "openpose_output/json"
+                ]:
+                    cand = os.path.join(input_dir, subpath)
+                    if os.path.isdir(cand):
+                        json_cand = cand
+                        break
+        if not json_cand:
+            # Fallback to the original subpath format
+            json_cand = os.path.join(input_dir, "train_2D_keypoints/openpose_output/json")
+    else:
+        # Default Kaggle paths search
         for path in [
             '/kaggle/input/datasets/nazarboholii/how2sign',
             '/kaggle/input/how2sign',
             '/kaggle/input/how2sign-keypoints',
             '/kaggle/input/datasets/nazarboholii/how2sign-keypoints'
         ]:
-            if os.path.exists(path):
+            if os.path.isdir(path):
                 input_dir = path
                 break
         else:
             input_dir = '/kaggle/input/datasets/nazarboholii/how2sign'
             
-    json_cand = os.path.join(input_dir, "train_2D_keypoints/openpose_output/json")
+        for subpath in [
+            "train_2D_keypoints/openpose_output/json",
+            "val_2D_keypoints/openpose_output/json",
+            "test_2D_keypoints/openpose_output/json",
+            "openpose_output/json"
+        ]:
+            cand = os.path.join(input_dir, subpath)
+            if os.path.isdir(cand):
+                json_cand = cand
+                break
+        if not json_cand:
+            json_cand = os.path.join(input_dir, "train_2D_keypoints/openpose_output/json")
+
     if not os.path.exists(json_cand):
         print(f"Error: Candidate OpenPose json folder {json_cand} does not exist!", file=sys.stderr)
         sys.exit(1)

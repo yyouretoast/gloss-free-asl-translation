@@ -56,7 +56,22 @@ def run_inference(
     )
     
     print(f"Loading checkpoint from: {checkpoint}")
-    state_dict = torch.load(os.path.join(checkpoint, "pytorch_model.bin"), map_location="cpu", weights_only=True)
+    checkpoint_bin = os.path.join(checkpoint, "pytorch_model.bin")
+    checkpoint_safe = os.path.join(checkpoint, "model.safetensors")
+    
+    if os.path.exists(checkpoint_safe):
+        try:
+            from safetensors.torch import load_file
+            print(f"Loading weights from {checkpoint_safe}")
+            state_dict = load_file(checkpoint_safe, device="cpu")
+        except ImportError:
+            raise ImportError("Found model.safetensors, but safetensors package is not installed. Please run `pip install safetensors`.")
+    elif os.path.exists(checkpoint_bin):
+        print(f"Loading weights from {checkpoint_bin}")
+        state_dict = torch.load(checkpoint_bin, map_location="cpu", weights_only=True)
+    else:
+        raise FileNotFoundError(f"Neither model.safetensors nor pytorch_model.bin found in {checkpoint}")
+        
     model.load_state_dict(state_dict)
     
     model = model.to(device)
@@ -82,11 +97,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run inference on ASL landmarks.")
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to saved model checkpoint.")
     parser.add_argument("--input", type=str, help="Path to single .npz or OpenPose dir.")
-    parser.add_argument("--input-dir", type=str, help="Directory of landmarks.")
+    parser.add_argument("--input-dir", "--input_dir", dest="input_dir", type=str, help="Directory of landmarks.")
     parser.add_argument("--limit", type=int, default=10, help="Max samples to process from directory.")
-    parser.add_argument("--t5-model", type=str, default="t5-small", help="T5 model name.")
-    parser.add_argument("--no-face", action="store_true", help="Disable facial expression landmarks.")
-    parser.add_argument("--max-len", type=int, default=150, help="Maximum frame sequence length.")
+    parser.add_argument("--t5-model", "--t5_model", dest="t5_model", type=str, default="t5-small", help="T5 model name.")
+    parser.add_argument("--no-face", "--no_face", dest="no_face", action="store_true", help="Disable facial expression landmarks.")
+    parser.add_argument("--max-len", "--max_len", dest="max_len", type=int, default=150, help="Maximum frame sequence length.")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
     
     args = parser.parse_args()

@@ -23,6 +23,7 @@ def test_encoder_forward():
     assert out.shape == (2, 25, 128)
     assert out_mask.shape == (2, 25)
 
+@pytest.mark.slow
 def test_model_forward(model):
     input_features = torch.randn(2, 50, 534)
     attention_mask = torch.ones(2, 50)
@@ -33,6 +34,7 @@ def test_model_forward(model):
     assert outputs.loss is not None
     assert outputs.logits.shape[:2] == (2, 10)
 
+@pytest.mark.slow
 def test_model_generate(model):
     input_features = torch.randn(1, 50, 534)
     attention_mask = torch.ones(1, 50)

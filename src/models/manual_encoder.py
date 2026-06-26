@@ -219,19 +219,8 @@ class ConformerEncoder(nn.Module):
             nn.LayerNorm(d_model)
         )
         
-        self.pos_encoding = PositionalEncoding(d_model)
-        self.dropout = nn.Dropout(dropout)
-        
-        # 2. Conformer Blocks (before downsampling)
-        # We will split layers to add a temporal downsampling pooling layer in the middle
-        self.num_layers = num_layers
-        self.first_half = nn.ModuleList([
-            ConformerBlock(d_model, num_heads, kernel_size, dropout=dropout)
-            for _ in range(num_layers // 2)
-        ])
-        
-        # 3. Temporal Pyramidal Downsampling (1D learnable Conv1d replacing MaxPool1d)
-        # Downsamples the sequence length by 2
+        # 2. Temporal Pyramidal Downsampling (1D learnable Conv1d replacing MaxPool1d)
+        # Downsamples the sequence length by 2 at the input stage
         self.downsample = nn.Conv1d(
             in_channels=d_model, 
             out_channels=d_model, 
@@ -240,10 +229,14 @@ class ConformerEncoder(nn.Module):
             padding=1
         )
         
-        # 4. Conformer Blocks (after downsampling)
-        self.second_half = nn.ModuleList([
+        self.pos_encoding = PositionalEncoding(d_model)
+        self.dropout = nn.Dropout(dropout)
+        
+        # 3. Conformer Blocks
+        self.num_layers = num_layers
+        self.blocks = nn.ModuleList([
             ConformerBlock(d_model, num_heads, kernel_size, dropout=dropout)
-            for _ in range(num_layers - (num_layers // 2))
+            for _ in range(num_layers)
         ])
         
     def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Optional[torch.BoolTensor]]:
@@ -262,6 +255,14 @@ class ConformerEncoder(nn.Module):
             
         # Feature projection
         x = self.projection(x)
+        
+        # Pyramidal Temporal Downsampling
+        # Conv1d expects shape: (batch, channels, seq_len)
+        x = x.transpose(1, 2)
+        x = self.downsample(x)
+        x = x.transpose(1, 2)
+        
+        # Positional Encoding and Dropout
         x = self.pos_encoding(x)
         x = self.dropout(x)
         
@@ -269,29 +270,14 @@ class ConformerEncoder(nn.Module):
         # Using < 0.5 is more robust across FP16/BF16 than == 0
         key_padding_mask = None
         if attention_mask is not None:
-            key_padding_mask = (attention_mask < 0.5)
-            
-        # First half of blocks
-        for block in self.first_half:
+            valid_mask = attention_mask.float().unsqueeze(1)  # (B, 1, L)
+            downsampled_valid = F.max_pool1d(valid_mask, kernel_size=3, stride=2, padding=1)
+            key_padding_mask = (downsampled_valid.squeeze(1) < 0.5)
+            # Ensure sequence length alignment (handles stride boundary)
+            key_padding_mask = key_padding_mask[:, :x.size(1)]
+                
+        # Conformer Blocks forward pass
+        for block in self.blocks:
             x = block(x, key_padding_mask=key_padding_mask)
             
-        # Pyramidal Temporal Downsampling
-        # Conv1d expects shape: (batch, channels, seq_len)
-        x = x.transpose(1, 2)
-        x = self.downsample(x)
-        x = x.transpose(1, 2)
-        
-        # Downsample the attention mask/padding mask as well using max_pool1d to respect receptive field
-        downsampled_mask = None
-        if key_padding_mask is not None:
-            valid_mask = (~key_padding_mask).float().unsqueeze(1)  # (B, 1, L)
-            downsampled_valid = F.max_pool1d(valid_mask, kernel_size=3, stride=2, padding=1)
-            downsampled_mask = (downsampled_valid.squeeze(1) < 0.5)
-            # Ensure sequence length alignment (handles stride boundary)
-            downsampled_mask = downsampled_mask[:, :x.size(1)]
-                
-        # Second half of blocks
-        for block in self.second_half:
-            x = block(x, key_padding_mask=downsampled_mask)
-            
-        return x, downsampled_mask
+        return x, key_padding_mask

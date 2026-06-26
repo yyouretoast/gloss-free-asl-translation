@@ -44,7 +44,7 @@ To achieve scale and camera distance invariance, frame-level landmarks are norma
 
 1. **Mid-Shoulder Centering ($p_{\text{mid-shoulder}}$)**:
    $$p_{\text{mid-shoulder}} = \frac{p_{\text{shoulder1}} + p_{\text{shoulder2}}}{2}$$
-   $$w_{\text{shoulder}} = \max\left(0.01, \|p_{\text{shoulder1}} - p_{\text{shoulder2}}\|_2\right)$$
+   $$w_{\text{shoulder}} = \begin{cases} \|p_{\text{shoulder1}} - p_{\text{shoulder2}}\|_2, & \text{if } \|p_{\text{shoulder1}} - p_{\text{shoulder2}}\|_2 \ge 0.05 \\ 0.25, & \text{otherwise} \end{cases}$$
    
    *For MediaPipe inputs, shoulders are indices `11` and `12`.*
    *For OpenPose BODY_25 inputs, shoulders are indices `2` and `5`.*
@@ -178,7 +178,7 @@ To train the model on the **How2Sign** dataset, use the provided `kaggle_trainin
 
 ### Training Options
 
-The training entry point (`src/train.py`) supports the following customized configuration flags:
+The training entry point (`src/train.py`) supports the following customized configuration flags (all arguments accept both underscore and hyphen formats, e.g. `--data_dir` or `--data-dir`):
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
@@ -187,6 +187,9 @@ The training entry point (`src/train.py`) supports the following customized conf
 | `--epochs` | `int` | `10` | Total training epochs |
 | `--batch_size` | `int` | `8` | Size of training batches |
 | `--lr` | `float` | `1e-4` | Learning rate |
+| `--output_dir` | `str` | `results/checkpoints` | Path to folder where training checkpoints are saved |
 | `--no_face` | `bool` | `False` | Disables face landmarks to study coordinate ablation (reduces dims) |
 | `--max_len` | `int` | `150` | Maximum frame sequence length (caps longer sequences to prevent OOM) |
+| `--max_target_len` | `int` | `30` | Maximum target text sequence token length |
+| `--resume_from_checkpoint` | `str` | `None` | Path to checkpoint directory to resume from, or `'latest'` to auto-detect |
 | `--t5_model` | `str` | `t5-small` | Hugging Face T5 decoder checkpoint (`t5-small` or `t5-base`) |

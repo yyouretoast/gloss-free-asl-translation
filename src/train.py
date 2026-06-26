@@ -26,23 +26,24 @@ from src.utils.splits import split_by_signer
 
 def main():
     parser = argparse.ArgumentParser(description="Train ASL Landmark to English translation model.")
-    parser.add_argument("--data_dir", type=str, default="data/landmarks", help="Path to landmark .npz directory")
+    parser.add_argument("--data_dir", "--data-dir", dest="data_dir", type=str, default="data/landmarks", help="Path to landmark .npz directory")
     parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size per device")
+    parser.add_argument("--batch_size", "--batch-size", dest="batch_size", type=int, default=8, help="Batch size per device")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
-    parser.add_argument("--output_dir", type=str, default="results/checkpoints", help="Output checkpoints folder")
-    parser.add_argument("--metadata_file", type=str, default=None, help="Path to metadata CSV/TSV file mapping video IDs to translations")
-    parser.add_argument("--no_face", action="store_true", help="Disable facial expression landmarks (for ablation study)")
-    parser.add_argument("--max_len", type=int, default=150, help="Maximum frame sequence length (caps longer sequences to prevent OOM)")
-    parser.add_argument("--max_target_len", type=int, default=30, help="Maximum target text sequence token length")
-    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to checkpoint folder to resume training from, or 'latest' to auto-detect")
+    parser.add_argument("--output_dir", "--output-dir", dest="output_dir", type=str, default="results/checkpoints", help="Output checkpoints folder")
+    parser.add_argument("--metadata_file", "--metadata-file", dest="metadata_file", type=str, default=None, help="Path to metadata CSV/TSV file mapping video IDs to translations")
+    parser.add_argument("--no_face", "--no-face", dest="no_face", action="store_true", help="Disable facial expression landmarks (for ablation study)")
+    parser.add_argument("--max_len", "--max-len", dest="max_len", type=int, default=150, help="Maximum frame sequence length (caps longer sequences to prevent OOM)")
+    parser.add_argument("--max_target_len", "--max-target-len", dest="max_target_len", type=int, default=30, help="Maximum target text sequence token length")
+    parser.add_argument("--resume_from_checkpoint", "--resume-from-checkpoint", dest="resume_from_checkpoint", type=str, default=None, help="Path to checkpoint folder to resume training from, or 'latest' to auto-detect")
+    parser.add_argument("--t5_model", "--t5-model", dest="t5_model", type=str, default="t5-small", help="Hugging Face T5 decoder checkpoint (t5-small or t5-base)")
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Training on device: {device}")
 
     # 1. Initialize tokenizer
-    t5_model_name = 't5-small'
+    t5_model_name = args.t5_model
     print(f"Loading tokenizer: {t5_model_name}")
     tokenizer = T5TokenizerFast.from_pretrained(t5_model_name)
 

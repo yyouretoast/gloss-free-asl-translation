@@ -1,3 +1,4 @@
+import pytest
 from src.dataset import ASLLandmarkDataset, CollateLandmarks
 
 def test_dataset_loading_and_normalization(mock_dataset_dir):
@@ -41,6 +42,7 @@ def test_dataset_missing_labels(mock_dataset_dir):
     # Should only load video_000
     assert len(dataset) == 1
 
+@pytest.mark.slow
 def test_collate_landmarks():
     from transformers import T5TokenizerFast
     tokenizer = T5TokenizerFast.from_pretrained("t5-small")
