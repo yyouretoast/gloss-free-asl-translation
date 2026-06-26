@@ -84,24 +84,36 @@ The feature vectors are concatenated per frame into a single 1D tensor depending
 ### Project Structure
 
 ```bash
+├── .github/               # GitHub configurations (CI/CD workflows)
 ├── data/                  # Local directory for mock/active landmarks (.npz files)
 ├── results/               # Training checkpoints and output logs
-├── scripts/               # Testing and profiling utilities
-│   ├── test_gpu.py        # CUDA capability checker
-│   ├── test_mediapipe.py  # MediaPipe installation check
-│   ├── test_model.py      # End-to-end forward/backward shape check script
-│   ├── test_pipeline.py   # Synthesized pipeline simulator
-│   ├── profile_memory.py  # GPU memory estimator for small/base T5 decoders
-│   └── export_onnx.py     # Conformer encoder ONNX export utility
+├── scripts/               # Testing, evaluation, and profiling utilities
+│   ├── check_environment.py # Environment setup and GPU capability checker
+│   ├── evaluate.py        # Quantitative evaluation script (BLEU-4 and WER)
+│   ├── export_onnx.py     # Conformer encoder ONNX export utility
+│   ├── inference.py       # Standalone landmark-to-English translation inference script
+│   ├── preprocess_how2sign.py # Preprocesses How2Sign JSONs to compressed .npz
+│   └── profile_memory.py  # GPU memory estimator for small/base T5 decoders
 ├── src/                   # Main source code
-│   ├── models/            # Neural network architectures (Conformer, Encoder, T5 Wrapper)
-│   ├── utils/             # Helper utilities (Metrics, Checkpointing, Visualizers)
+│   ├── models/            # Neural network architectures
+│   │   ├── __init__.py    # Models package entry point
+│   │   ├── manual_encoder.py # Conformer Encoder implementation
+│   │   └── translation_model.py # Combined Conformer-T5 architecture
+│   ├── utils/             # Helper utilities
+│   │   ├── __init__.py    # Utils package entry point
+│   │   ├── io_utils.py    # Shared JSON and directory loading utilities
+│   │   ├── metadata.py    # CSV/TSV metadata parsing logic
+│   │   └── splits.py      # Signer-independent splitting logic
 │   ├── data_pipeline.py   # MediaPipe extractor and formatter
 │   ├── dataset.py         # LandmarkDataset & collators (NPZ + JSON OpenPose)
-│   ├── train.py           # Seq2SeqTrainer setup and wrapper
+│   ├── train.py           # Thin orchestrator script for model training
 │   └── validate_dataset.py # Statistics and noise validation script
-├── tests/                 # Unit and integration tests
-├── kaggle_training.ipynb  # Interactive Kaggle GPU/TPU training notebook
+├── tests/                 # Unit and integration tests (using pytest)
+│   ├── conftest.py        # Shared pytest fixtures
+│   ├── test_dataset.py    # Unit tests for datasets and collations
+│   ├── test_model.py      # Unit tests for translation model architecture
+│   └── test_pipeline.py   # Unit tests for MediaPipe feature extraction pipeline
+├── kaggle_training.ipynb  # Interactive Kaggle GPU training notebook
 ├── pyproject.toml         # Python package and tool configuration
 ├── requirements.txt       # Environment specifications
 └── README.md              # Project overview
@@ -124,10 +136,14 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-### Verify Compilation
-Run the local compilation and forward pass test:
+### Verify Installation
+Run environment capability check:
 ```bash
-python scripts/test_model.py
+python -m scripts.check_environment
+```
+Run the test suite (excluding slow integration tests by default):
+```bash
+pytest tests/ -v -m "not slow"
 ```
 Run a local dry-run training pass (executes 1 epoch on mock data):
 ```bash
@@ -136,10 +152,10 @@ python -m src.train --epochs 1 --batch_size 2
 Export Conformer Encoder to ONNX:
 ```bash
 # Default (534 dimensions for MediaPipe format)
-python scripts/export_onnx.py
+python -m scripts.export_onnx
 
 # Specify dimensions (e.g., 411 dimensions for How2Sign OpenPose format)
-python scripts/export_onnx.py 411
+python -m scripts.export_onnx --input-dim 411
 ```
 
 ### Running on Kaggle
