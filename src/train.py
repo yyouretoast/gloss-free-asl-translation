@@ -100,8 +100,9 @@ def main():
     # Set model's autoregressive generation config maximum length to avoid T5 default 20-token truncation
     model.generation_config.max_length = args.max_target_len
 
-    # Calculate warmup steps dynamically based on dataset size and epochs
-    steps_per_epoch = len(train_dataset) // args.batch_size
+    # Calculate warmup steps dynamically based on dataset size, epochs, and gradient accumulation
+    grad_accum_steps = 8
+    steps_per_epoch = len(train_dataset) // (args.batch_size * grad_accum_steps)
     if steps_per_epoch == 0:
         steps_per_epoch = 1
     total_training_steps = steps_per_epoch * args.epochs
@@ -113,6 +114,7 @@ def main():
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
+        gradient_accumulation_steps=8,  # Simulates effective batch size of 64
         learning_rate=args.lr,
         weight_decay=0.01,
         logging_dir=os.path.join(args.output_dir, "logs"),
@@ -168,6 +170,40 @@ def main():
             "wer": float(wer)
         }
 
+    # Group parameters for differential learning rates (1e-4 for Conformer/Bridge, 1e-5 for T5 Decoder)
+    no_decay = ["bias", "LayerNorm.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay) and "t5" not in n],
+            "weight_decay": 0.01,
+            "lr": args.lr,
+        },
+        {
+            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay) and "t5" not in n],
+            "weight_decay": 0.0,
+            "lr": args.lr,
+        },
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay) and "t5" in n],
+            "weight_decay": 0.01,
+            "lr": args.lr * 0.1,  # 10x smaller learning rate for T5 decoder parameters
+        },
+        {
+            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay) and "t5" in n],
+            "weight_decay": 0.0,
+            "lr": args.lr * 0.1,  # 10x smaller learning rate for T5 decoder parameters
+        },
+    ]
+    
+    from transformers.optimization import Adafactor
+    optimizer = Adafactor(
+        optimizer_grouped_parameters,
+        scale_parameter=False,
+        relative_step=False,
+        warmup_init=False,
+        lr=args.lr
+    )
+
     # 9. Initialize Trainer
     trainer = Seq2SeqTrainer(
         model=model,
@@ -177,7 +213,8 @@ def main():
         data_collator=collate_fn,
         processing_class=tokenizer,
         compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)] # Added per requirements
+        optimizers=(optimizer, None),
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
     )
 
     # 10. Start Training Loop

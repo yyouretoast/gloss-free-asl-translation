@@ -181,9 +181,13 @@ class ASLLandmarkDataset(Dataset):
         else:
             features = manual_feats
 
-        # Truncate if sequence exceeds max_len
-        if len(features) > self.max_len:
-            features = features[:self.max_len]
+        # Stride-based temporal downsampling to compress sequence while preserving full sentence duration
+        seq_len = len(features)
+        if seq_len > self.max_len:
+            stride = int(np.ceil(seq_len / self.max_len))
+            features = features[::stride]
+            if len(features) > self.max_len:
+                features = features[:self.max_len]
             
         # Get target text label (default to empty string if not in metadata)
         target_text = self.metadata_dict.get(basename, "")
