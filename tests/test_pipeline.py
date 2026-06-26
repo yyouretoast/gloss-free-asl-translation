@@ -5,8 +5,7 @@ import tempfile
 import numpy as np
 
 def test_pipeline_extraction():
-    # Skip if mediapipe is not installed or lacks legacy solutions
-    mp = pytest.importorskip("mediapipe")
+    pytest.importorskip("mediapipe")
     try:
         from src.data_pipeline import ASLLandmarkExtractor
         extractor = ASLLandmarkExtractor()
