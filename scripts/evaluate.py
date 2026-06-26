@@ -44,10 +44,8 @@ def evaluate(
     # Simple metadata loading (can be updated to use src.utils.metadata in Wave 2)
     metadata = {}
     if metadata_file and os.path.exists(metadata_file):
-        import pandas as pd
-        df = pd.read_csv(metadata_file)
-        if 'id' in df.columns and 'text' in df.columns:
-            metadata = dict(zip(df['id'].astype(str), df['text'].astype(str)))
+        from src.utils.metadata import load_metadata
+        metadata, _ = load_metadata(metadata_file)
     else:
         print("Warning: No metadata provided. Evaluation requires target labels.")
         return
