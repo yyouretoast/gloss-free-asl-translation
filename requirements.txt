@@ -1,7 +1,7 @@
 numpy
 pandas
 opencv-python
-mediapipe>=0.10.14
+mediapipe==0.10.14
 torch
 transformers>=4.46.0
 accelerate>=1.1.0

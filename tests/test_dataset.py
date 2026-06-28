@@ -23,7 +23,7 @@ def test_dataset_loading_and_normalization(mock_dataset_dir):
     assert 'text' in sample
     assert 'file_id' in sample
     
-    # 225 for mediapipe manual + 276 face = 501
+    # 225 for manual (33*3 pose + 21*3 left hand + 21*3 right hand) + 276 face (92*3) = 501
     assert sample['features'].shape[1] == 501
 
 def test_dataset_missing_labels(mock_dataset_dir):
