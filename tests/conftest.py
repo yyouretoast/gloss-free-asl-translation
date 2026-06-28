@@ -3,16 +3,18 @@ import numpy as np
 import os
 import tempfile
 
+
 @pytest.fixture
 def mock_landmark_data():
     """Generates mock landmark data for testing."""
     num_frames = 100
     return {
-        'pose': np.random.rand(num_frames, 33, 4).astype(np.float32),
-        'left_hand': np.random.rand(num_frames, 21, 3).astype(np.float32),
-        'right_hand': np.random.rand(num_frames, 21, 3).astype(np.float32),
-        'face': np.random.rand(num_frames, 92, 3).astype(np.float32)
+        "pose": np.random.rand(num_frames, 33, 4).astype(np.float32),
+        "left_hand": np.random.rand(num_frames, 21, 3).astype(np.float32),
+        "right_hand": np.random.rand(num_frames, 21, 3).astype(np.float32),
+        "face": np.random.rand(num_frames, 92, 3).astype(np.float32),
     }
+
 
 @pytest.fixture
 def mock_dataset_dir(mock_landmark_data):
@@ -23,12 +25,14 @@ def mock_dataset_dir(mock_landmark_data):
             np.savez_compressed(filepath, **mock_landmark_data)
         yield tmpdir
 
+
 @pytest.fixture
 def mock_holistic_data():
     """Generates mock MediaPipe 3D Holistic combined landmark data."""
     num_frames = 100
     # 543 landmarks, 3 coordinates each (x, y, z)
     return np.random.rand(num_frames, 543, 3).astype(np.float32)
+
 
 @pytest.fixture
 def mock_holistic_dir(mock_holistic_data):
@@ -39,12 +43,14 @@ def mock_holistic_dir(mock_holistic_data):
             np.save(filepath, mock_holistic_data)
         yield tmpdir
 
+
 @pytest.fixture
 def mock_i3d_data():
     """Generates mock I3D spatiotemporal feature data."""
     num_frames = 100
     # 1024-dimensional feature vectors
     return np.random.rand(num_frames, 1024).astype(np.float32)
+
 
 @pytest.fixture
 def mock_i3d_dir(mock_i3d_data):

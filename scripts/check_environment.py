@@ -1,6 +1,8 @@
 """Checks the local environment for GPU availability and MediaPipe setup."""
+
 from __future__ import annotations
 import torch
+
 
 def check_gpu() -> None:
     print("--- PyTorch GPU Check ---")
@@ -14,11 +16,13 @@ def check_gpu() -> None:
         print("CUDA is NOT available. PyTorch will use CPU.")
     print()
 
+
 def check_mediapipe() -> None:
     print("--- MediaPipe Check ---")
     try:
         import mediapipe as mp
         import importlib.metadata
+
         try:
             version = importlib.metadata.version("mediapipe")
         except importlib.metadata.PackageNotFoundError:
@@ -30,12 +34,15 @@ def check_mediapipe() -> None:
         print("Install with: pip install mediapipe")
     print()
 
+
 def check_package(package_name: str) -> None:
     print(f"--- {package_name} Check ---")
     try:
         import importlib
+
         pkg = importlib.import_module(package_name)
         import importlib.metadata
+
         try:
             version = importlib.metadata.version(package_name)
         except importlib.metadata.PackageNotFoundError:
@@ -47,12 +54,14 @@ def check_package(package_name: str) -> None:
         print(f"Install with: pip install {package_name}")
     print()
 
+
 def main() -> None:
     check_gpu()
     check_mediapipe()
     for pkg in ["onnx", "onnxruntime", "safetensors", "jiwer", "sacrebleu"]:
         check_package(pkg)
     print("Environment check complete.")
+
 
 if __name__ == "__main__":
     main()

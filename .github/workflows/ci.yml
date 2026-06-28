@@ -18,6 +18,8 @@ jobs:
         run: pip install ruff
       - name: Run Ruff check
         run: ruff check .
+      - name: Run Ruff format check
+        run: ruff format --check .
 
   test:
     runs-on: ubuntu-latest

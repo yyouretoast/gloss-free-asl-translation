@@ -3,7 +3,7 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "asl-translation"
+name = "gloss-free-asl-translation"
 version = "0.1.0"
 description = "Gloss-free ASL-to-English translation using Conformer encoder and T5 decoder"
 requires-python = ">=3.10"
