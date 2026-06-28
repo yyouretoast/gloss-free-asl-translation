@@ -28,7 +28,7 @@ def _compute_wrist_noise(pose: np.ndarray, left_hand_missing: np.ndarray, right_
     shoulder_idx_1 = 11
     shoulder_idx_2 = 12
         
-    shoulder_diff = pose[:, shoulder_idx_1, :2] - pose[:, shoulder_idx_2, :2]
+    shoulder_diff = pose[:, shoulder_idx_1, :3] - pose[:, shoulder_idx_2, :3]
     shoulder_widths = np.linalg.norm(shoulder_diff, axis=-1)
     mean_shoulder_width = float(np.mean(shoulder_widths))
     # Use 0.05 threshold to match dataset.py
@@ -42,9 +42,13 @@ def _compute_wrist_noise(pose: np.ndarray, left_hand_missing: np.ndarray, right_
     left_deltas = np.linalg.norm(np.diff(left_wrists, axis=0), axis=1)
     right_deltas = np.linalg.norm(np.diff(right_wrists, axis=0), axis=1)
     
-    # Average delta across frames that have valid movement.
-    valid_left_mask = (~left_hand_missing[:-1]) & (~left_hand_missing[1:])
-    valid_right_mask = (~right_hand_missing[:-1]) & (~right_hand_missing[1:])
+    # Filter out frames where wrist coordinate is exactly zero or NaN (dropout)
+    left_valid = (np.linalg.norm(left_wrists, axis=1) > 1e-5) & (~np.isnan(left_wrists).any(axis=1))
+    right_valid = (np.linalg.norm(right_wrists, axis=1) > 1e-5) & (~np.isnan(right_wrists).any(axis=1))
+    
+    # Average delta across frames that have valid movement and no dropout.
+    valid_left_mask = (~left_hand_missing[:-1]) & (~left_hand_missing[1:]) & left_valid[:-1] & left_valid[1:]
+    valid_right_mask = (~right_hand_missing[:-1]) & (~right_hand_missing[1:]) & right_valid[:-1] & right_valid[1:]
     
     valid_left = left_deltas[valid_left_mask]
     valid_right = right_deltas[valid_right_mask]

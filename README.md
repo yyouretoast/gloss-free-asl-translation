@@ -91,7 +91,6 @@ The feature vectors are concatenated per frame into a single 1D tensor:
 │   ├── evaluate.py        # Quantitative evaluation script (BLEU-4 and WER)
 │   ├── export_onnx.py     # Conformer encoder ONNX export utility
 │   ├── inference.py       # Standalone landmark-to-English translation inference script
-│   ├── preprocess_how2sign.py # (Deprecated) Preprocessed How2Sign OpenPose JSONs to compressed .npz
 │   └── profile_memory.py  # GPU memory estimator for small/base T5 decoders
 ├── src/                   # Main source code
 │   ├── models/            # Neural network architectures
@@ -150,11 +149,11 @@ python -m src.train --epochs 1 --batch_size 2
 ```
 Export Conformer Encoder to ONNX:
 ```bash
-# Default (534 dimensions for MediaPipe format)
+# Default (501 dimensions for MediaPipe Holistic format)
 python -m scripts.export_onnx
 
-# Specify dimensions if not using the default 534
-python -m scripts.export_onnx --input-dim 501
+# Specify dimensions (e.g. 225 dimensions for face-disabled ablation run)
+python -m scripts.export_onnx --input-dim 225
 ```
 
 ### Running on Kaggle
@@ -192,3 +191,4 @@ The training entry point (`src/train.py`) supports the following customized conf
 | `--max_target_len` | `int` | `30` | Maximum target text sequence token length |
 | `--resume_from_checkpoint` | `str` | `None` | Path to checkpoint directory to resume from, or `'latest'` to auto-detect |
 | `--t5_model` | `str` | `t5-small` | Hugging Face T5 decoder checkpoint (`t5-small` or `t5-base`) |
+| `--i3d_dir` | `str` | `None` | Path to precomputed I3D features directory (enables Multi-Stream Gated Fusion) |

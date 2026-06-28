@@ -181,25 +181,24 @@ class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, max_len: int = 10000) -> None:
         super().__init__()
         self.d_model = d_model
-        self._extend_pe(max_len, torch.device("cpu"), torch.float32)
+        # Initialize default buffer on CPU
+        self.register_buffer('pe', self._get_pe(max_len, torch.device("cpu"), torch.float32))
 
-    def _extend_pe(self, length: int, device: torch.device, dtype: torch.dtype) -> None:
-        pe = torch.zeros(length, self.d_model, device=device, dtype=dtype)
+    def _get_pe(self, length: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
         position = torch.arange(0, length, dtype=dtype, device=device).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, self.d_model, 2, dtype=dtype, device=device) * (-math.log(10000.0) / self.d_model))
         
-        sin_term = torch.sin(position * div_term)
-        cos_term = torch.cos(position * div_term)
-        
-        pe[:, 0::2] = sin_term[:, :pe[:, 0::2].size(1)]
-        pe[:, 1::2] = cos_term[:, :pe[:, 1::2].size(1)]
-        
-        self.register_buffer('pe', pe.unsqueeze(0))
+        pe = torch.zeros(length, self.d_model, device=device, dtype=dtype)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe.unsqueeze(0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         seq_len = x.size(1)
-        if not hasattr(self, 'pe') or self.pe.size(1) < seq_len:
-            self._extend_pe(seq_len, x.device, x.dtype)
+        if self.pe.size(1) < seq_len:
+            # Generate on-the-fly without registering/mutating buffers
+            pe = self._get_pe(seq_len, x.device, x.dtype)
+            return x + pe
         return x + self.pe[:, :seq_len].to(device=x.device, dtype=x.dtype)
 
 class ConformerEncoder(nn.Module):
@@ -251,13 +250,8 @@ class ConformerEncoder(nn.Module):
             downsampled_mask = attention_mask[:, ::2]
             key_padding_mask = (downsampled_mask < 0.5)
             
-            # Align mask length with features, padding with True (masked) if needed
-            key_padding_mask = key_padding_mask.to(torch.uint8)
-            if key_padding_mask.size(1) < x.size(1):
-                key_padding_mask = F.pad(key_padding_mask, (0, x.size(1) - key_padding_mask.size(1)), value=1)
-            elif key_padding_mask.size(1) > x.size(1):
-                key_padding_mask = key_padding_mask[:, :x.size(1)]
-            key_padding_mask = key_padding_mask.to(torch.bool)
+            # Align mask length with features in a trace-friendly manner
+            key_padding_mask = key_padding_mask[:, :x.size(1)]
                 
         for block in self.blocks:
             x = block(x, key_padding_mask=key_padding_mask)

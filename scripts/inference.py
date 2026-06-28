@@ -21,7 +21,8 @@ def run_inference(
     no_face: bool = False,
     max_len: int = 150,
     device: str = "auto",
-    i3d_dir: str | None = None
+    i3d_dir: str | None = None,
+    num_beams: int = 5
 ) -> None:
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -72,6 +73,9 @@ def run_inference(
     has_i3d_weights = any('i3d_projection' in k or 'gate_conv' in k for k in state_dict.keys())
     input_i3d_dim = 1024 if has_i3d_weights else None
     
+    if has_i3d_weights and not i3d_dir:
+        print("\nWARNING: Loaded checkpoint was trained with Gated Fusion (I3D), but no --i3d-dir was provided. The model will run in landmark-only mode, which may result in poor translations.\n")
+        
     print(f"Initializing Model (Conformer -> T5) with input_dim={input_dim}, input_i3d_dim={input_i3d_dim}...")
     model = ASLTranslationModel(
         input_dim=input_dim,
@@ -103,7 +107,8 @@ def run_inference(
                 input_features=features,
                 attention_mask=attention_mask,
                 input_i3d_features=i3d_feats,
-                max_new_tokens=30
+                max_new_tokens=30,
+                num_beams=num_beams
             )
             
             prediction = tokenizer.decode(output_ids[0], skip_special_tokens=True)
@@ -119,6 +124,7 @@ def main() -> None:
     parser.add_argument("--t5-model", "--t5_model", dest="t5_model", type=str, default="t5-small", help="T5 model name.")
     parser.add_argument("--no-face", "--no_face", dest="no_face", action="store_true", help="Disable facial expression landmarks.")
     parser.add_argument("--max-len", "--max_len", dest="max_len", type=int, default=150, help="Maximum frame sequence length.")
+    parser.add_argument("--num-beams", "--num_beams", dest="num_beams", type=int, default=5, help="Number of beams for sequence generation.")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
     
     args = parser.parse_args()
@@ -141,7 +147,8 @@ def main() -> None:
         no_face=args.no_face,
         max_len=args.max_len,
         device=args.device,
-        i3d_dir=args.i3d_dir
+        i3d_dir=args.i3d_dir,
+        num_beams=args.num_beams
     )
 
 if __name__ == "__main__":

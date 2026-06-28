@@ -16,11 +16,12 @@ def split_by_signer(filepaths: List[str], video_to_signer: Dict[str, str]) -> Tu
     
     for filepath in filepaths:
         basename = os.path.splitext(os.path.basename(filepath))[0]
+        clean_basename = basename.replace('_holistic', '').replace('_landmarks', '')
         signer_id = None
         
         # Try metadata mapping.
-        if basename in video_to_signer:
-            signer_id = str(video_to_signer[basename]).strip()
+        if clean_basename in video_to_signer:
+            signer_id = str(video_to_signer[clean_basename]).strip()
             
         # Infer from filename prefix.
         if not signer_id:

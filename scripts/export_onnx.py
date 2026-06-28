@@ -40,15 +40,8 @@ def export_encoder_to_onnx(
     This bypasses the T5 Decoder's auto-regressive generation loop, which cannot
     be easily traced or exported to ONNX due to conditional control flows.
     """
-    print(f"Initializing model for ONNX export (input_dim={input_dim}, t5_model_name={t5_model_name})...")
-    model = ASLTranslationModel(
-        input_dim=input_dim,
-        d_model=d_model,
-        t5_model_name=t5_model_name,
-        num_layers=num_layers,
-        num_heads=num_heads,
-        kernel_size=kernel_size
-    )
+    state_dict = None
+    input_i3d_dim = None
     
     # Load weights if path is provided
     if model_path:
@@ -74,6 +67,27 @@ def export_encoder_to_onnx(
                 raise ImportError("Found model.safetensors, but safetensors package is not installed. Please run `pip install safetensors`.")
         else:
             state_dict = torch.load(model_path, map_location='cpu', weights_only=True)
+            
+        # Strip 'module.' prefix
+        state_dict = {k[7:] if k.startswith("module.") else k: v for k, v in state_dict.items()}
+        
+        # Inspect state dict keys for multimodal I3D parameters
+        has_i3d_weights = any('i3d_projection' in k or 'gate_conv' in k for k in state_dict.keys())
+        if has_i3d_weights:
+            input_i3d_dim = 1024
+            
+    print(f"Initializing model for ONNX export (input_dim={input_dim}, input_i3d_dim={input_i3d_dim}, t5_model_name={t5_model_name})...")
+    model = ASLTranslationModel(
+        input_dim=input_dim,
+        input_i3d_dim=input_i3d_dim,
+        d_model=d_model,
+        t5_model_name=t5_model_name,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        kernel_size=kernel_size
+    )
+    
+    if state_dict:
         model.load_state_dict(state_dict)
     
     # Extract encoder and modality bridge modules, wrap them for export

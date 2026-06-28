@@ -30,9 +30,28 @@ def check_mediapipe() -> None:
         print("Install with: pip install mediapipe")
     print()
 
+def check_package(package_name: str) -> None:
+    print(f"--- {package_name} Check ---")
+    try:
+        import importlib
+        pkg = importlib.import_module(package_name)
+        import importlib.metadata
+        try:
+            version = importlib.metadata.version(package_name)
+        except importlib.metadata.PackageNotFoundError:
+            version = getattr(pkg, "__version__", "unknown")
+        print(f"{package_name} Version: {version}")
+        print(f"{package_name} imported successfully.")
+    except ImportError as e:
+        print(f"Failed to import {package_name}: {e}")
+        print(f"Install with: pip install {package_name}")
+    print()
+
 def main() -> None:
     check_gpu()
     check_mediapipe()
+    for pkg in ["onnx", "onnxruntime", "safetensors", "jiwer", "sacrebleu"]:
+        check_package(pkg)
     print("Environment check complete.")
 
 if __name__ == "__main__":

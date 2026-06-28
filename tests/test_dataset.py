@@ -23,8 +23,8 @@ def test_dataset_loading_and_normalization(mock_dataset_dir):
     assert 'text' in sample
     assert 'file_id' in sample
     
-    # 258 for mediapipe manual + 276 face = 534
-    assert sample['features'].shape[1] == 534
+    # 225 for mediapipe manual + 276 face = 501
+    assert sample['features'].shape[1] == 501
 
 def test_dataset_missing_labels(mock_dataset_dir):
     metadata = {
@@ -51,13 +51,13 @@ def test_collate_landmarks():
     
     import torch
     batch = [
-        {'features': torch.randn(50, 534), 'text': "hello", 'file_id': "id1"},
-        {'features': torch.randn(30, 534), 'text': "world", 'file_id': "id2"}
+        {'features': torch.randn(50, 501), 'text': "hello", 'file_id': "id1"},
+        {'features': torch.randn(30, 501), 'text': "world", 'file_id': "id2"}
     ]
     
     collated = collate(batch)
     
-    assert collated['input_features'].shape == (2, 50, 534)
+    assert collated['input_features'].shape == (2, 50, 501)
     assert collated['attention_mask'].shape == (2, 50)
     assert collated['labels'].shape == (2, 10)
     

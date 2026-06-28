@@ -37,7 +37,7 @@ def main():
     parser.add_argument("--max_len", "--max-len", dest="max_len", type=int, default=150, help="Maximum frame sequence length (caps longer sequences to prevent OOM)")
     parser.add_argument("--max_target_len", "--max-target-len", dest="max_target_len", type=int, default=30, help="Maximum target text sequence token length")
     parser.add_argument("--resume_from_checkpoint", "--resume-from-checkpoint", dest="resume_from_checkpoint", type=str, default=None, help="Path to checkpoint folder to resume training from, or 'latest' to auto-detect")
-    parser.add_argument("--t5_model", "--t5-model", dest="t5_model", type=str, default="t5-base", help="Hugging Face T5 decoder checkpoint (t5-small or t5-base)")
+    parser.add_argument("--t5_model", "--t5-model", dest="t5_model", type=str, default="t5-small", help="Hugging Face T5 decoder checkpoint (t5-small or t5-base)")
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -107,13 +107,6 @@ def main():
     model.generation_config.max_length = args.max_target_len
 
     # Calculate warmup steps dynamically based on dataset size, epochs, and gradient accumulation
-    grad_accum_steps = 8
-    steps_per_epoch = len(train_dataset) // (args.batch_size * grad_accum_steps)
-    if steps_per_epoch == 0:
-        steps_per_epoch = 1
-    total_training_steps = steps_per_epoch * args.epochs
-    warmup_steps = int(0.1 * total_training_steps)
-
     # 7. Define Seq2Seq Training Arguments
     training_args = Seq2SeqTrainingArguments(
         output_dir=args.output_dir,
@@ -134,7 +127,7 @@ def main():
         fp16=torch.cuda.is_available(), # Use mixed precision if GPU available
         report_to="none",  # Prevents wandb prompts on Kaggle
         remove_unused_columns=False,
-        warmup_steps=warmup_steps,    # Dynamic warmup steps to stabilize training early
+        warmup_ratio=0.1,             # Dynamic warmup ratio to stabilize training early
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",  # Use loss instead of WER — WER stays flat at ~1.0 for many early epochs and triggers premature early stopping
         greater_is_better=False,
@@ -173,7 +166,10 @@ def main():
             wer = jiwer.wer(decoded_labels, decoded_preds)
         except Exception:
             wer = 1.0
-        bleu = sacrebleu.corpus_bleu(decoded_preds, [decoded_labels]).score
+        try:
+            bleu = sacrebleu.corpus_bleu(decoded_preds, [decoded_labels]).score
+        except Exception:
+            bleu = 0.0
         
         return {
             "bleu": float(bleu),

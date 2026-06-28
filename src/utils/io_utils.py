@@ -86,12 +86,13 @@ def load_i3d_npy(filepath: str | Path) -> np.ndarray:
 
 
 def discover_landmark_paths(data_dir: str | Path) -> list[str]:
-    """Discover landmark files (.npz, .npy)."""
+    """Discover landmark files (.npz, .npy) recursively if none found at top level."""
     data_dir_str = str(data_dir)
     
     if os.path.isfile(data_dir_str):
         return [data_dir_str]
-    
+        
+    # First try top-level discovery
     npz_files = glob.glob(os.path.join(data_dir_str, '*.npz'))
     if npz_files:
         return sorted(npz_files)
@@ -99,5 +100,11 @@ def discover_landmark_paths(data_dir: str | Path) -> list[str]:
     npy_files = glob.glob(os.path.join(data_dir_str, '*.npy'))
     if npy_files:
         return sorted(npy_files)
-    
-    return []
+        
+    # If no files found at top-level, search recursively using os.walk
+    discovered = []
+    for root, _, files in os.walk(data_dir_str):
+        for f in files:
+            if f.endswith('.npz') or f.endswith('.npy'):
+                discovered.append(os.path.join(root, f))
+    return sorted(discovered)

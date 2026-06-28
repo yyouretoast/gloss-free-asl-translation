@@ -28,6 +28,15 @@ class ASLLandmarkDataset(Dataset):
         self.normalize = normalize
         self.i3d_dir = i3d_dir
         
+        self.i3d_file_map = {}
+        if i3d_dir:
+            # Build clean_basename -> absolute_path mapping recursively (fast scan)
+            for root, _, files in os.walk(i3d_dir):
+                for f in files:
+                    if f.endswith('.npy'):
+                        bname = os.path.splitext(f)[0].replace('_holistic', '').replace('_landmarks', '')
+                        self.i3d_file_map[bname] = os.path.join(root, f)
+        
         # Identify if dataset is for training to enable augmentations.
         self.is_training = False
         if data_dir and 'train' in data_dir.lower():
@@ -50,7 +59,8 @@ class ASLLandmarkDataset(Dataset):
             valid_filepaths = []
             for fp in self.filepaths:
                 basename = os.path.splitext(os.path.basename(fp))[0]
-                if not self.metadata_dict.get(basename, "").strip():
+                clean_basename = basename.replace('_holistic', '').replace('_landmarks', '')
+                if not self.metadata_dict.get(clean_basename, "").strip():
                     missing_count += 1
                 else:
                     valid_filepaths.append(fp)
@@ -125,7 +135,7 @@ class ASLLandmarkDataset(Dataset):
                 face = landmarks['face']
             else:
                 with np.load(file_path) as data:
-                    pose = data['pose']
+                    pose = data['pose'][..., :3]
                     left_hand = data['left_hand']
                     right_hand = data['right_hand']
                     face = data['face']
@@ -140,8 +150,7 @@ class ASLLandmarkDataset(Dataset):
             
         if load_failed:
             # Fallback to dummy zero frame to prevent pipeline crashes.
-            pose_dim = 3 if file_path.endswith('.npy') else 4
-            pose = np.zeros((1, 33, pose_dim), dtype=np.float32)
+            pose = np.zeros((1, 33, 3), dtype=np.float32)
             left_hand = np.zeros((1, 21, 3), dtype=np.float32)
             right_hand = np.zeros((1, 21, 3), dtype=np.float32)
             face = np.zeros((1, 92, 3), dtype=np.float32)
@@ -151,8 +160,10 @@ class ASLLandmarkDataset(Dataset):
         i3d_features = None
         if self.i3d_dir:
             from src.utils.io_utils import load_i3d_npy
-            i3d_basename = basename.replace('_holistic', '')
-            i3d_path = os.path.join(self.i3d_dir, f"{i3d_basename}.npy")
+            i3d_basename = basename.replace('_holistic', '').replace('_landmarks', '')
+            i3d_path = self.i3d_file_map.get(i3d_basename)
+            if i3d_path is None:
+                i3d_path = os.path.join(self.i3d_dir, f"{i3d_basename}.npy")
             try:
                 i3d_features = load_i3d_npy(i3d_path)
             except Exception as e:
@@ -161,13 +172,17 @@ class ASLLandmarkDataset(Dataset):
                 i3d_features = np.zeros((num_frames, 1024), dtype=np.float32)
 
             # Align sequence length via interpolation.
-            if num_frames <= 1 or i3d_features.shape[0] <= 1:
+            if i3d_features.shape[0] == 0:
+                i3d_features = np.zeros((num_frames, 1024), dtype=np.float32)
+            elif num_frames <= 1 or i3d_features.shape[0] <= 1:
                 i3d_features = np.tile(i3d_features[0], (num_frames, 1))
             elif i3d_features.shape[0] != num_frames:
-                import torch.nn.functional as F
-                i3d_tensor = torch.tensor(i3d_features, dtype=torch.float32).T.unsqueeze(0)
-                i3d_tensor = F.interpolate(i3d_tensor, size=num_frames, mode='linear', align_corners=False)
-                i3d_features = i3d_tensor.squeeze(0).T.numpy()
+                old_x = np.linspace(0, 1, i3d_features.shape[0])
+                new_x = np.linspace(0, 1, num_frames)
+                interpolated = np.zeros((num_frames, i3d_features.shape[1]), dtype=np.float32)
+                for c in range(i3d_features.shape[1]):
+                    interpolated[:, c] = np.interp(new_x, old_x, i3d_features[:, c])
+                i3d_features = interpolated
 
         # Apply training-only data augmentations.
         if self.is_training and not load_failed:
@@ -182,12 +197,25 @@ class ASLLandmarkDataset(Dataset):
                 # Swap symmetric joints.
                 if pose.shape[1] == 33:
                     sym_pairs = [
-                        (1, 2), (3, 4), (5, 6), (7, 8), (9, 10),
+                        (1, 4), (2, 5), (3, 6), (7, 8), (9, 10),
                         (11, 12), (13, 14), (15, 16), (17, 18), (19, 20), (21, 22),
                         (23, 24), (25, 26), (27, 28), (29, 30), (31, 32)
                     ]
                     for i, j in sym_pairs:
                         pose[:, [i, j]] = pose[:, [j, i]]
+                
+                # Swap symmetric face landmarks (eyes, eyebrows, lips)
+                if face.shape[1] == 92:
+                    face_sym_pairs = [
+                        (48, 1), (49, 5), (50, 6), (51, 7), (52, 8), (53, 10), (54, 11), (55, 12),
+                        (56, 13), (57, 14), (58, 15), (59, 16), (60, 17), (61, 18), (62, 19), (64, 20),
+                        (65, 21), (66, 22), (67, 23), (68, 24), (69, 25), (70, 26), (71, 27), (72, 28),
+                        (73, 29), (74, 30), (75, 31), (76, 32), (77, 33), (78, 34), (79, 35), (80, 36),
+                        (81, 37), (82, 38), (83, 39), (84, 40), (85, 41), (86, 42), (87, 43), (88, 44),
+                        (89, 46), (91, 47)
+                    ]
+                    for i, j in face_sym_pairs:
+                        face[:, [i, j]] = face[:, [j, i]]
             
             # Temporal jittering.
             if np.random.rand() < 0.5 and num_frames > 5:
@@ -246,7 +274,8 @@ class ASLLandmarkDataset(Dataset):
                 if i3d_features is not None:
                     i3d_features = i3d_features[:self.max_len]
             
-        target_text = self.metadata_dict.get(basename, "")
+        clean_basename = basename.replace('_holistic', '').replace('_landmarks', '')
+        target_text = self.metadata_dict.get(clean_basename, "")
 
         sample = {
             'features': torch.tensor(features, dtype=torch.float32),
@@ -254,7 +283,7 @@ class ASLLandmarkDataset(Dataset):
             'file_id': basename
         }
         if i3d_features is not None:
-            sample['i3d_features'] = torch.tensor(i3d_features, dtype=torch.float32)
+            sample['i3d_features'] = torch.as_tensor(i3d_features, dtype=torch.float32)
             
         return sample
 
@@ -265,8 +294,10 @@ class CollateLandmarks:
         self.tokenizer = tokenizer
         self.max_target_len = max_target_len
 
-    def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-        features = [item['features'] for item in batch]
+    def __call__(self, batch: list[dict]) -> dict:
+        if not batch:
+            return {}
+        features = [torch.as_tensor(item['features'], dtype=torch.float32) for item in batch]
         texts = [item['text'] for item in batch]
         file_ids = [item['file_id'] for item in batch]
         
@@ -295,14 +326,15 @@ class CollateLandmarks:
         }
         
         # Pad and align I3D features if present in batch.
-        has_i3d = all('i3d_features' in item for item in batch)
-        if has_i3d:
-            i3d_features = [item['i3d_features'] for item in batch]
+        has_any_i3d = any('i3d_features' in item for item in batch)
+        if has_any_i3d:
             padded_i3d = torch.zeros(len(batch), max_seq_len, 1024)
-            for i, i3d_f in enumerate(i3d_features):
-                seq_len = len(i3d_f)
-                limit_len = min(seq_len, max_seq_len)
-                padded_i3d[i, :limit_len] = i3d_f[:limit_len]
+            for i, item in enumerate(batch):
+                if 'i3d_features' in item:
+                    i3d_f = item['i3d_features']
+                    seq_len = len(i3d_f)
+                    limit_len = min(seq_len, max_seq_len)
+                    padded_i3d[i, :limit_len] = i3d_f[:limit_len]
             batch_dict['input_i3d_features'] = padded_i3d
         
         # Tokenize target text.
@@ -316,7 +348,8 @@ class CollateLandmarks:
             )
             # Ignore pad token index in loss.
             labels = tokenized.input_ids
-            labels[labels == self.tokenizer.pad_token_id] = -100
+            if self.tokenizer.pad_token_id is not None:
+                labels[labels == self.tokenizer.pad_token_id] = -100
             batch_dict['labels'] = labels
             batch_dict['decoder_attention_mask'] = tokenized.attention_mask
         else:

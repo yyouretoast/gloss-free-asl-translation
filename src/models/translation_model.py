@@ -55,6 +55,9 @@ class ASLTranslationModel(nn.Module):
                 stride=2,
                 padding=1
             )
+            self.i3d_norm = nn.LayerNorm(d_model)
+            self.i3d_act = nn.SiLU()
+            
             # Gated fusion layers using a 1D temporal convolution (3-frame window)
             self.gate_conv = nn.Conv1d(
                 in_channels=2 * d_model,
@@ -62,6 +65,7 @@ class ASLTranslationModel(nn.Module):
                 kernel_size=3,
                 padding=1
             )
+            self.fusion_norm = nn.LayerNorm(d_model)
             
         # T5-Small d_model is 512, T5-Base is 768, T5-Large is 1024
         t5_d_model = self.t5.config.d_model
@@ -75,6 +79,51 @@ class ASLTranslationModel(nn.Module):
 
         # Expose generation config for Seq2SeqTrainer
         self.generation_config = self.t5.generation_config
+
+    def _fuse_modalities(
+        self,
+        outputs: torch.Tensor,
+        input_i3d_features: Optional[torch.Tensor],
+        downsampled_mask: Optional[torch.Tensor]
+    ) -> torch.Tensor:
+        if self.input_i3d_dim is None:
+            return outputs
+            
+        if input_i3d_features is None:
+            import warnings
+            warnings.warn("Model was configured with input_i3d_dim, but input_i3d_features is None. Falling back to landmark-only generation.")
+            return outputs
+            
+        import torch.nn.functional as F
+        # Shape: (batch, seq_len_i3d // 2, d_model)
+        i3d_proj = self.i3d_projection(input_i3d_features.transpose(1, 2)).transpose(1, 2)
+        
+        # Apply LayerNorm and Activation to stabilize projection scale
+        i3d_proj = self.i3d_norm(i3d_proj)
+        i3d_proj = self.i3d_act(i3d_proj)
+        
+        # Align downsampled sequence lengths exactly without python branching (ONNX compatible)
+        i3d_proj = F.pad(i3d_proj, (0, 0, 0, outputs.size(1)))[:, :outputs.size(1), :]
+        
+        # Zero-mask padded positions in I3D projection to avoid boundary leakage during convolution
+        if downsampled_mask is not None:
+            i3d_proj = i3d_proj.masked_fill(downsampled_mask.unsqueeze(-1), 0.0)
+            
+        # Compute temporal gate over moving window
+        combined = torch.cat([outputs, i3d_proj], dim=-1) # (B, seq_len // 2, 2 * d_model)
+        gate = torch.sigmoid(self.gate_conv(combined.transpose(1, 2)).transpose(1, 2)) # (B, seq_len // 2, d_model)
+        
+        # Apply gated fusion blending
+        outputs = gate * outputs + (1.0 - gate) * i3d_proj
+        
+        # Zero-mask fused output to ensure padded positions remain 0.0
+        if downsampled_mask is not None:
+            outputs = outputs.masked_fill(downsampled_mask.unsqueeze(-1), 0.0)
+            
+        # Normalize fused representations
+        outputs = self.fusion_norm(outputs)
+        
+        return outputs
 
     def forward(
         self, 
@@ -90,20 +139,7 @@ class ASLTranslationModel(nn.Module):
         outputs, downsampled_mask = self.encoder(input_features, attention_mask=attention_mask)
         
         # Gated Multimodal Fusion (if I3D features are present)
-        if input_i3d_features is not None and self.input_i3d_dim is not None:
-            import torch.nn.functional as F
-            # Shape: (batch, seq_len_i3d // 2, d_model)
-            i3d_proj = self.i3d_projection(input_i3d_features.transpose(1, 2)).transpose(1, 2)
-            
-            # Align downsampled sequence lengths exactly without python branching (ONNX compatible)
-            i3d_proj = F.pad(i3d_proj, (0, 0, 0, outputs.size(1)))[:, :outputs.size(1), :]
-                
-            # Compute temporal gate over moving window
-            combined = torch.cat([outputs, i3d_proj], dim=-1) # (B, seq_len // 2, 2 * d_model)
-            gate = torch.sigmoid(self.gate_conv(combined.transpose(1, 2)).transpose(1, 2)) # (B, seq_len // 2, d_model)
-            
-            # Apply gated fusion blending
-            outputs = gate * outputs + (1.0 - gate) * i3d_proj
+        outputs = self._fuse_modalities(outputs, input_i3d_features, downsampled_mask)
         
         # Project dimensions using the MLP bridge
         outputs = self.modality_bridge(outputs)
@@ -145,16 +181,7 @@ class ASLTranslationModel(nn.Module):
             outputs, downsampled_mask = self.encoder(input_features, attention_mask=attention_mask)
             
             # Gated Multimodal Fusion (if I3D features are present)
-            if input_i3d_features is not None and self.input_i3d_dim is not None:
-                import torch.nn.functional as F
-                i3d_proj = self.i3d_projection(input_i3d_features.transpose(1, 2)).transpose(1, 2)
-                
-                # Align downsampled sequence lengths exactly without python branching (ONNX compatible)
-                i3d_proj = F.pad(i3d_proj, (0, 0, 0, outputs.size(1)))[:, :outputs.size(1), :]
-                    
-                combined = torch.cat([outputs, i3d_proj], dim=-1)
-                gate = torch.sigmoid(self.gate_conv(combined.transpose(1, 2)).transpose(1, 2))
-                outputs = gate * outputs + (1.0 - gate) * i3d_proj
+            outputs = self._fuse_modalities(outputs, input_i3d_features, downsampled_mask)
 
             outputs = self.modality_bridge(outputs)
             encoder_outputs = BaseModelOutput(last_hidden_state=outputs)

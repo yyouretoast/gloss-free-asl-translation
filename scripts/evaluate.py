@@ -30,7 +30,8 @@ def evaluate(
     max_len: int = 150,
     batch_size: int = 8,
     device: str = "auto",
-    i3d_dir: str | None = None
+    i3d_dir: str | None = None,
+    num_beams: int = 5
 ) -> None:
     if not jiwer or not sacrebleu:
         print("Error: jiwer and sacrebleu packages are required for evaluation. Run `pip install jiwer sacrebleu`.")
@@ -96,6 +97,9 @@ def evaluate(
     has_i3d_weights = any('i3d_projection' in k or 'gate_conv' in k for k in state_dict.keys())
     input_i3d_dim = 1024 if has_i3d_weights else None
     
+    if has_i3d_weights and not i3d_dir:
+        print("\nWARNING: Loaded checkpoint was trained with Gated Fusion (I3D), but no --i3d-dir was provided. The model will run in landmark-only mode, which may result in poor translations.\n")
+        
     print(f"Initializing Model (Conformer -> T5) with input_dim={input_dim}, input_i3d_dim={input_i3d_dim}...")
     model = ASLTranslationModel(
         input_dim=input_dim,
@@ -116,31 +120,36 @@ def evaluate(
     all_labels = []
     
     print("Running evaluation...")
-    with torch.no_grad():
-        for batch in dataloader:
-            features = batch['input_features'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            labels = batch['labels'].numpy()
-            
-            i3d_feats = None
-            if 'input_i3d_features' in batch:
-                i3d_feats = batch['input_i3d_features'].to(device)
+    try:
+        with torch.no_grad():
+            for batch in dataloader:
+                features = batch['input_features'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+                labels = batch['labels'].numpy()
                 
-            output_ids = model.generate(
-                input_features=features,
-                attention_mask=attention_mask,
-                input_i3d_features=i3d_feats,
-                max_new_tokens=30
-            )
-            
-            preds = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
-            
-            # Replace -100 in labels so they can be decoded
-            labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-            decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-            
-            all_preds.extend([p.strip() for p in preds])
-            all_labels.extend([lbl.strip() for lbl in decoded_labels])
+                i3d_feats = None
+                if 'input_i3d_features' in batch:
+                    i3d_feats = batch['input_i3d_features'].to(device)
+                    
+                output_ids = model.generate(
+                    input_features=features,
+                    attention_mask=attention_mask,
+                    input_i3d_features=i3d_feats,
+                    max_new_tokens=30,
+                    num_beams=num_beams
+                )
+                
+                preds = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
+                
+                # Replace -100 in labels so they can be decoded
+                labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+                decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+                
+                all_preds.extend([p.strip() for p in preds])
+                all_labels.extend([lbl.strip() for lbl in decoded_labels])
+    except torch.cuda.OutOfMemoryError:
+        print("Error: GPU Out of Memory occurred during evaluation generation. Try decreasing --batch-size.")
+        return
             
     # Compute metrics
     valid_preds = [p if p else " " for p in all_preds]
@@ -150,7 +159,10 @@ def evaluate(
         wer = jiwer.wer(valid_labels, valid_preds)
     except Exception:
         wer = 1.0
-    bleu = sacrebleu.corpus_bleu(valid_preds, [valid_labels]).score
+    try:
+        bleu = sacrebleu.corpus_bleu(valid_preds, [valid_labels]).score
+    except Exception:
+        bleu = 0.0
     
     print("\n--- Evaluation Results ---")
     print(f"Total Samples: {len(valid_labels)}")
@@ -173,6 +185,7 @@ def main() -> None:
     parser.add_argument("--no-face", "--no_face", dest="no_face", action="store_true", help="Disable facial expression landmarks.")
     parser.add_argument("--max-len", "--max_len", dest="max_len", type=int, default=150, help="Maximum frame sequence length.")
     parser.add_argument("--batch-size", "--batch_size", dest="batch_size", type=int, default=8, help="Batch size.")
+    parser.add_argument("--num-beams", "--num_beams", dest="num_beams", type=int, default=5, help="Number of beams for sequence generation.")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
     
     args = parser.parse_args()
@@ -186,7 +199,8 @@ def main() -> None:
         max_len=args.max_len,
         batch_size=args.batch_size,
         device=args.device,
-        i3d_dir=args.i3d_dir
+        i3d_dir=args.i3d_dir,
+        num_beams=args.num_beams
     )
 
 if __name__ == "__main__":
