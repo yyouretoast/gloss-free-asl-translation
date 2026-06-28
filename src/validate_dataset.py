@@ -4,7 +4,7 @@ import json
 import numpy as np
 from typing import Optional, Dict, Any, Tuple
 
-from src.utils.io_utils import discover_landmark_paths, load_openpose_directory
+from src.utils.io_utils import discover_landmark_paths
 
 def _compute_missing_rates(left_hand: np.ndarray, right_hand: np.ndarray, face: np.ndarray, num_frames: int) -> Tuple[float, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """Computes tracking failure rates based on all-zero frames."""
@@ -25,12 +25,8 @@ def _compute_wrist_noise(pose: np.ndarray, left_hand_missing: np.ndarray, right_
         return 0.0
         
     # Calculate shoulder width to normalize coordinate delta
-    if pose.shape[1] == 25: # OpenPose
-        shoulder_idx_1 = 5
-        shoulder_idx_2 = 2
-    else: # MediaPipe
-        shoulder_idx_1 = 11
-        shoulder_idx_2 = 12
+    shoulder_idx_1 = 11
+    shoulder_idx_2 = 12
         
     shoulder_diff = pose[:, shoulder_idx_1, :2] - pose[:, shoulder_idx_2, :2]
     shoulder_widths = np.linalg.norm(shoulder_diff, axis=-1)
@@ -71,49 +67,35 @@ def _extract_signer_id(file_path: str) -> str:
 
 def analyze_single_file(file_path: str) -> Optional[Dict[str, Any]]:
     """
-    Analyzes a single landmark .npz file or OpenPose directory to compute statistics.
+    Analyzes a single landmark .npz file or .npy file to compute statistics.
     """
-    if os.path.isdir(file_path):
-        try:
-            landmarks = load_openpose_directory(file_path)
+    try:
+        if file_path.endswith('.npy'):
+            from src.utils.io_utils import load_holistic_npy
+            landmarks = load_holistic_npy(file_path)
             pose = landmarks['pose']
             left_hand = landmarks['left_hand']
             right_hand = landmarks['right_hand']
             face = landmarks['face']
-            left_wrist_pose_idx = 7
-            right_wrist_pose_idx = 4
-        except (IOError, json.JSONDecodeError, KeyError, ValueError) as e:
-            import warnings
-            warnings.warn(f"Skipping {file_path}: {e}")
-            return None
-    else:
-        try:
-            if file_path.endswith('.npy'):
-                from src.utils.io_utils import load_holistic_npy
-                landmarks = load_holistic_npy(file_path)
-                pose = landmarks['pose']
-                left_hand = landmarks['left_hand']
-                right_hand = landmarks['right_hand']
-                face = landmarks['face']
-            else:
-                with np.load(file_path) as data:
-                    # Check keys
-                    required_keys = {'pose', 'left_hand', 'right_hand', 'face'}
-                    if not required_keys.issubset(data.files):
-                        print(f"Warning: {file_path} is missing keys. Found: {list(data.files)}")
-                        return None
+        else:
+            with np.load(file_path) as data:
+                # Check keys
+                required_keys = {'pose', 'left_hand', 'right_hand', 'face'}
+                if not required_keys.issubset(data.files):
+                    print(f"Warning: {file_path} is missing keys. Found: {list(data.files)}")
+                    return None
 
-                    pose = data['pose']
-                    left_hand = data['left_hand']
-                    right_hand = data['right_hand']
-                    face = data['face']
-        except (IOError, OSError, ValueError, KeyError) as e:
-            import warnings
-            warnings.warn(f"Skipping {file_path}: {e}")
-            return None
-        
-        left_wrist_pose_idx = 15
-        right_wrist_pose_idx = 16
+                pose = data['pose']
+                left_hand = data['left_hand']
+                right_hand = data['right_hand']
+                face = data['face']
+    except (IOError, OSError, ValueError, KeyError) as e:
+        import warnings
+        warnings.warn(f"Skipping {file_path}: {e}")
+        return None
+    
+    left_wrist_pose_idx = 15
+    right_wrist_pose_idx = 16
 
     num_frames = pose.shape[0]
     signer_id = _extract_signer_id(file_path)
@@ -147,12 +129,12 @@ def analyze_single_file(file_path: str) -> Optional[Dict[str, Any]]:
 
 def validate_dataset(directory_path: str, limit: int = 50) -> Optional[Dict[str, Any]]:
     """
-    Scans a directory of landmark .npz files or OpenPose JSON directories and computes aggregate statistics.
+    Scans a directory of landmark .npz or .npy files and computes aggregate statistics.
     """
     files = discover_landmark_paths(directory_path)
             
     if not files:
-        print(f"No coordinate files (.npz) or OpenPose directories found in {directory_path}")
+        print(f"No coordinate files (.npz or .npy) found in {directory_path}")
         return None
         
     if limit and len(files) > limit:

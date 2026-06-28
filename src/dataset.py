@@ -42,7 +42,7 @@ class ASLLandmarkDataset(Dataset):
         
         if len(self.filepaths) == 0:
             import warnings
-            warnings.warn(f"No landmark files (.npz) or OpenPose folders found in '{data_dir}'.")
+            warnings.warn(f"No landmark files (.npz or .npy) found in '{data_dir}'.")
             
         # Filter out files with missing/empty labels.
         if self.metadata_dict and skip_empty_labels:
@@ -68,14 +68,9 @@ class ASLLandmarkDataset(Dataset):
 
     def _normalize_landmarks(self, pose: np.ndarray, left_hand: np.ndarray, right_hand: np.ndarray, face: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Normalize coordinates relative to skeleton reference points."""
-        if pose.shape[1] == 25:
-            spatial_dim = 2
-            shoulder_idx_1 = 5
-            shoulder_idx_2 = 2
-        else:
-            spatial_dim = 3
-            shoulder_idx_1 = 11
-            shoulder_idx_2 = 12
+        spatial_dim = 3
+        shoulder_idx_1 = 11
+        shoulder_idx_2 = 12
             
         # 1. Pose Normalization
         pose_spatial = pose[..., :spatial_dim]
@@ -128,13 +123,6 @@ class ASLLandmarkDataset(Dataset):
                 left_hand = landmarks['left_hand']
                 right_hand = landmarks['right_hand']
                 face = landmarks['face']
-            elif os.path.isdir(file_path):
-                from src.utils.io_utils import load_openpose_directory
-                landmarks = load_openpose_directory(file_path)
-                pose = landmarks['pose']
-                left_hand = landmarks['left_hand']
-                right_hand = landmarks['right_hand']
-                face = landmarks['face']
             else:
                 with np.load(file_path) as data:
                     pose = data['pose']
@@ -152,14 +140,11 @@ class ASLLandmarkDataset(Dataset):
             
         if load_failed:
             # Fallback to dummy zero frame to prevent pipeline crashes.
-            is_openpose = os.path.isdir(file_path)
-            pose_dim = 3 if (file_path.endswith('.npy') or is_openpose) else 4
-            pose_kpts = 25 if is_openpose else 33
-            face_kpts = 70 if is_openpose else 92
-            pose = np.zeros((1, pose_kpts, pose_dim), dtype=np.float32)
+            pose_dim = 3 if file_path.endswith('.npy') else 4
+            pose = np.zeros((1, 33, pose_dim), dtype=np.float32)
             left_hand = np.zeros((1, 21, 3), dtype=np.float32)
             right_hand = np.zeros((1, 21, 3), dtype=np.float32)
-            face = np.zeros((1, face_kpts, 3), dtype=np.float32)
+            face = np.zeros((1, 92, 3), dtype=np.float32)
             num_frames = 1
 
         # Load and align I3D features if present.

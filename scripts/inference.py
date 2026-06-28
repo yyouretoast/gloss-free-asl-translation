@@ -112,7 +112,7 @@ def run_inference(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run inference on ASL landmarks.")
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to saved model checkpoint.")
-    parser.add_argument("--input", type=str, help="Path to single .npz or OpenPose dir.")
+    parser.add_argument("--input", type=str, help="Path to single .npz or .npy file.")
     parser.add_argument("--input-dir", "--input_dir", dest="input_dir", type=str, help="Directory of landmarks.")
     parser.add_argument("--i3d-dir", "--i3d_dir", dest="i3d_dir", type=str, default=None, help="Directory of precomputed I3D features.")
     parser.add_argument("--limit", type=int, default=10, help="Max samples to process from directory.")
