@@ -154,6 +154,9 @@ def main():
         decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
         decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
         
+        # Log metric evaluation count to verify DDP/predict_with_generate gathering
+        print(f"\n--- Evaluated {len(decoded_preds)} predictions inside compute_metrics ---")
+        
         # Clean whitespaces
         decoded_preds = [p.strip() for p in decoded_preds]
         decoded_labels = [lbl.strip() for lbl in decoded_labels]

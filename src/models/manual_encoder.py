@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 
 class FeedForwardModule(nn.Module):
@@ -245,8 +246,14 @@ class ConformerEncoder(nn.Module):
         
         key_padding_mask = None
         if attention_mask is not None:
-            # Downsample attention mask to match the feature downsampling stride (1 for valid, 0 for pad)
-            downsampled_mask = attention_mask[:, ::2]
+            # Downsample attention mask to match the feature downsampling Conv1d parameters (1 for valid, 0 for pad)
+            # Use max_pool1d with same parameters (kernel_size=3, stride=2, padding=1) to ensure perfect alignment
+            downsampled_mask = F.max_pool1d(
+                attention_mask.unsqueeze(1).float(),
+                kernel_size=3,
+                stride=2,
+                padding=1
+            ).squeeze(1)
             key_padding_mask = (downsampled_mask < 0.5)
             
             # Align mask length with features in a trace-friendly manner
