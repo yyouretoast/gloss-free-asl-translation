@@ -8,10 +8,8 @@ from typing import Dict, List, Optional, Any
 from src.utils.io_utils import discover_landmark_paths
 
 class ASLLandmarkDataset(Dataset):
-    """
-    A PyTorch Dataset that loads pre-extracted landmark files (.npz)
-    and maps them to target English text labels.
-    """
+    """Dataset for loading pre-extracted sign language landmarks."""
+    
     def __init__(
         self, 
         data_dir: str, 
@@ -20,26 +18,22 @@ class ASLLandmarkDataset(Dataset):
         max_len: int = 150, 
         include_face: bool = True, 
         normalize: bool = True,
-        skip_empty_labels: bool = True
+        skip_empty_labels: bool = True,
+        i3d_dir: Optional[str] = None
     ):
-        """
-        Args:
-            data_dir (str): Directory containing .npz files.
-            metadata_dict (dict): Dictionary mapping file basenames (without extension)
-                                  to their English translation text.
-            file_list (list): Optional list of specific file paths. If None, scans data_dir.
-            max_len (int): Maximum frame sequence length. Longer sequences are truncated.
-            include_face (bool): If True, concatenates face expression landmarks (276 dims for MediaPipe, 
-                                 210 dims for OpenPose) with manual landmarks (258 dims for MediaPipe, 
-                                 201 dims for OpenPose) for a total of 534 or 411 dims respectively.
-            normalize (bool): If True, applies frame-level geometric normalization.
-            skip_empty_labels (bool): If True, filters out files that have empty labels.
-        """
         self.data_dir = data_dir
         self.metadata_dict = metadata_dict if metadata_dict is not None else {}
         self.max_len = max_len
         self.include_face = include_face
         self.normalize = normalize
+        self.i3d_dir = i3d_dir
+        
+        # Identify if dataset is for training to enable augmentations.
+        self.is_training = False
+        if data_dir and 'train' in data_dir.lower():
+            self.is_training = True
+        elif file_list and any('train' in fp.lower() for fp in file_list):
+            self.is_training = True
         
         if file_list is not None:
             self.filepaths = file_list
@@ -50,7 +44,7 @@ class ASLLandmarkDataset(Dataset):
             import warnings
             warnings.warn(f"No landmark files (.npz) or OpenPose folders found in '{data_dir}'.")
             
-        # Filter out samples with missing labels to avoid wasting training compute
+        # Filter out files with missing/empty labels.
         if self.metadata_dict and skip_empty_labels:
             missing_count = 0
             valid_filepaths = []
@@ -73,15 +67,7 @@ class ASLLandmarkDataset(Dataset):
         return len(self.filepaths)
 
     def _normalize_landmarks(self, pose: np.ndarray, left_hand: np.ndarray, right_hand: np.ndarray, face: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Normalizes landmark coordinates:
-        - Pose: centered relative to mid-shoulder, scaled by shoulder width.
-        - Hands: centered relative to their respective wrist joints and scaled by shoulder width.
-        - Face: centered relative to face centroid and scaled by shoulder width.
-        Normalizes only spatial coordinates, leaving visibility/confidence untouched.
-        """
-        # OpenPose BODY_25 has 25 keypoints (shoulders are index 2 and 5)
-        # MediaPipe has 33 keypoints (shoulders are index 11 and 12)
+        """Normalize coordinates relative to skeleton reference points."""
         if pose.shape[1] == 25:
             spatial_dim = 2
             shoulder_idx_1 = 5
@@ -95,38 +81,35 @@ class ASLLandmarkDataset(Dataset):
         pose_spatial = pose[..., :spatial_dim]
         pose_extra = pose[..., spatial_dim:]
         
-        mid_shoulder = (pose_spatial[:, shoulder_idx_1, :] + pose_spatial[:, shoulder_idx_2, :]) / 2.0  # (num_frames, spatial_dim)
-        mid_shoulder = np.expand_dims(mid_shoulder, axis=1)  # (num_frames, 1, spatial_dim)
+        mid_shoulder = (pose_spatial[:, shoulder_idx_1, :] + pose_spatial[:, shoulder_idx_2, :]) / 2.0
+        mid_shoulder = np.expand_dims(mid_shoulder, axis=1)
         
         shoulder_width = np.linalg.norm(pose_spatial[:, shoulder_idx_1, :] - pose_spatial[:, shoulder_idx_2, :], axis=-1, keepdims=True)
-        shoulder_width = np.expand_dims(shoulder_width, axis=1)  # (num_frames, 1, 1)
+        shoulder_width = np.expand_dims(shoulder_width, axis=1)
         
-        # Avoid coordinate explosion when shoulder width is too small (e.g. tracking failure)
-        # Use 0.05 threshold (not 0.01) to catch near-failure tracking, and fall back
-        # to a fixed 0.25 scale (approximate normalized shoulder width) rather than
-        # the near-zero value, to prevent coordinate explosion.
+        # Avoid division by zero/near-zero by using a fallback scale.
         shoulder_width = np.where(shoulder_width < 0.05, 0.25, shoulder_width)
         
         norm_pose_spatial = (pose_spatial - mid_shoulder) / shoulder_width
         norm_pose = np.concatenate([norm_pose_spatial, pose_extra], axis=-1)
         
-        # 2. Hand Normalization (Wrist-relative & body-scale normalized)
+        # 2. Hand Normalization
         lh_spatial = left_hand[..., :spatial_dim]
         lh_extra = left_hand[..., spatial_dim:]
-        left_wrist = np.expand_dims(lh_spatial[:, 0, :], axis=1)  # (num_frames, 1, spatial_dim)
+        left_wrist = np.expand_dims(lh_spatial[:, 0, :], axis=1)
         norm_lh_spatial = (lh_spatial - left_wrist) / shoulder_width
         norm_left_hand = np.concatenate([norm_lh_spatial, lh_extra], axis=-1)
         
         rh_spatial = right_hand[..., :spatial_dim]
         rh_extra = right_hand[..., spatial_dim:]
-        right_wrist = np.expand_dims(rh_spatial[:, 0, :], axis=1)  # (num_frames, 1, spatial_dim)
+        right_wrist = np.expand_dims(rh_spatial[:, 0, :], axis=1)
         norm_rh_spatial = (rh_spatial - right_wrist) / shoulder_width
         norm_right_hand = np.concatenate([norm_rh_spatial, rh_extra], axis=-1)
         
-        # 3. Face Normalization (Centroid-relative & body-scale normalized)
+        # 3. Face Normalization
         face_spatial = face[..., :spatial_dim]
         face_extra = face[..., spatial_dim:]
-        face_centroid = np.mean(face_spatial, axis=1, keepdims=True)  # (num_frames, 1, spatial_dim)
+        face_centroid = np.mean(face_spatial, axis=1, keepdims=True)
         norm_face_spatial = (face_spatial - face_centroid) / shoulder_width
         norm_face = np.concatenate([norm_face_spatial, face_extra], axis=-1)
         
@@ -136,14 +119,28 @@ class ASLLandmarkDataset(Dataset):
         file_path = self.filepaths[idx]
         basename = os.path.splitext(os.path.basename(file_path))[0]
         
-        # Load landmarks (only supporting .npz format for performance)
         load_failed = False
         try:
-            with np.load(file_path) as data:
-                pose = data['pose']          # shape (num_frames, 33, 4)
-                left_hand = data['left_hand']  # shape (num_frames, 21, 3)
-                right_hand = data['right_hand'] # shape (num_frames, 21, 3)
-                face = data['face']          # shape (num_frames, 92, 3)
+            if file_path.endswith('.npy'):
+                from src.utils.io_utils import load_holistic_npy
+                landmarks = load_holistic_npy(file_path)
+                pose = landmarks['pose']
+                left_hand = landmarks['left_hand']
+                right_hand = landmarks['right_hand']
+                face = landmarks['face']
+            elif os.path.isdir(file_path):
+                from src.utils.io_utils import load_openpose_directory
+                landmarks = load_openpose_directory(file_path)
+                pose = landmarks['pose']
+                left_hand = landmarks['left_hand']
+                right_hand = landmarks['right_hand']
+                face = landmarks['face']
+            else:
+                with np.load(file_path) as data:
+                    pose = data['pose']
+                    left_hand = data['left_hand']
+                    right_hand = data['right_hand']
+                    face = data['face']
                 
             num_frames = pose.shape[0]
             if num_frames == 0:
@@ -154,71 +151,141 @@ class ASLLandmarkDataset(Dataset):
             load_failed = True
             
         if load_failed:
-            # Fallback to a single dummy frame of zeros to prevent training runs from crashing
-            pose = np.zeros((1, 33, 4), dtype=np.float32)
+            # Fallback to dummy zero frame to prevent pipeline crashes.
+            is_openpose = os.path.isdir(file_path)
+            pose_dim = 3 if (file_path.endswith('.npy') or is_openpose) else 4
+            pose_kpts = 25 if is_openpose else 33
+            face_kpts = 70 if is_openpose else 92
+            pose = np.zeros((1, pose_kpts, pose_dim), dtype=np.float32)
             left_hand = np.zeros((1, 21, 3), dtype=np.float32)
             right_hand = np.zeros((1, 21, 3), dtype=np.float32)
-            face = np.zeros((1, 92, 3), dtype=np.float32)
+            face = np.zeros((1, face_kpts, 3), dtype=np.float32)
             num_frames = 1
+
+        # Load and align I3D features if present.
+        i3d_features = None
+        if self.i3d_dir:
+            from src.utils.io_utils import load_i3d_npy
+            i3d_basename = basename.replace('_holistic', '')
+            i3d_path = os.path.join(self.i3d_dir, f"{i3d_basename}.npy")
+            try:
+                i3d_features = load_i3d_npy(i3d_path)
+            except Exception as e:
+                import warnings
+                warnings.warn(f"Failed to load I3D file {i3d_path}: {e}. Returning dummy zeros.")
+                i3d_features = np.zeros((num_frames, 1024), dtype=np.float32)
+
+            # Align sequence length via interpolation.
+            if num_frames <= 1 or i3d_features.shape[0] <= 1:
+                i3d_features = np.tile(i3d_features[0], (num_frames, 1))
+            elif i3d_features.shape[0] != num_frames:
+                import torch.nn.functional as F
+                i3d_tensor = torch.tensor(i3d_features, dtype=torch.float32).T.unsqueeze(0)
+                i3d_tensor = F.interpolate(i3d_tensor, size=num_frames, mode='linear', align_corners=False)
+                i3d_features = i3d_tensor.squeeze(0).T.numpy()
+
+        # Apply training-only data augmentations.
+        if self.is_training and not load_failed:
+            # Horizontal mirroring.
+            if np.random.rand() < 0.5:
+                pose[..., 0] = -pose[..., 0]
+                left_hand[..., 0] = -left_hand[..., 0]
+                right_hand[..., 0] = -right_hand[..., 0]
+                face[..., 0] = -face[..., 0]
+                left_hand, right_hand = right_hand.copy(), left_hand.copy()
+                
+                # Swap symmetric joints.
+                if pose.shape[1] == 33:
+                    sym_pairs = [
+                        (1, 2), (3, 4), (5, 6), (7, 8), (9, 10),
+                        (11, 12), (13, 14), (15, 16), (17, 18), (19, 20), (21, 22),
+                        (23, 24), (25, 26), (27, 28), (29, 30), (31, 32)
+                    ]
+                    for i, j in sym_pairs:
+                        pose[:, [i, j]] = pose[:, [j, i]]
+            
+            # Temporal jittering.
+            if np.random.rand() < 0.5 and num_frames > 5:
+                num_to_change = max(1, int(num_frames * 0.1))
+                indices = list(range(num_frames))
+                if np.random.rand() < 0.5:
+                    drop_indices = set(np.random.choice(num_frames, num_to_change, replace=False))
+                    indices = [i for i in indices if i not in drop_indices]
+                else:
+                    dup_indices = np.random.choice(num_frames, num_to_change, replace=False)
+                    for d_idx in dup_indices:
+                        indices.append(d_idx)
+                    indices = sorted(indices)
+                
+                pose = pose[indices]
+                left_hand = left_hand[indices]
+                right_hand = right_hand[indices]
+                face = face[indices]
+                if i3d_features is not None:
+                    i3d_features = i3d_features[indices]
+                num_frames = len(indices)
+            
+            # Hand joint dropout.
+            if np.random.rand() < 0.05:
+                if np.random.rand() < 0.5:
+                    left_hand = np.zeros_like(left_hand)
+                else:
+                    right_hand = np.zeros_like(right_hand)
 
         if self.normalize:
             pose, left_hand, right_hand, face = self._normalize_landmarks(pose, left_hand, right_hand, face)
         
-        # Flatten landmark dimensions per frame
-        # Pose: (N, 132), Hands: (N, 63) each
+        # Flatten and combine landmarks.
         pose_flat = pose.reshape(num_frames, -1)
         left_hand_flat = left_hand.reshape(num_frames, -1)
         right_hand_flat = right_hand.reshape(num_frames, -1)
         
-        # Combine manual features: shape (num_frames, 258) for MediaPipe or (num_frames, 201) for OpenPose
         manual_feats = np.concatenate([pose_flat, left_hand_flat, right_hand_flat], axis=1)
         
         if self.include_face:
-            # Face: (N, 276)
             face_flat = face.reshape(num_frames, -1)
-            # Combine manual + face: shape (num_frames, 534) for MediaPipe or (num_frames, 411) for OpenPose
             features = np.concatenate([manual_feats, face_flat], axis=1)
         else:
             features = manual_feats
 
-        # Stride-based temporal downsampling to compress sequence while preserving full sentence duration
+        # Stride-based downsampling.
         seq_len = len(features)
         if seq_len > self.max_len:
             stride = int(np.ceil(seq_len / self.max_len))
             features = features[::stride]
+            if i3d_features is not None:
+                i3d_features = i3d_features[::stride]
+            
             if len(features) > self.max_len:
                 features = features[:self.max_len]
+                if i3d_features is not None:
+                    i3d_features = i3d_features[:self.max_len]
             
-        # Get target text label (default to empty string if not in metadata)
         target_text = self.metadata_dict.get(basename, "")
 
-        return {
+        sample = {
             'features': torch.tensor(features, dtype=torch.float32),
             'text': target_text,
             'file_id': basename
         }
+        if i3d_features is not None:
+            sample['i3d_features'] = torch.tensor(i3d_features, dtype=torch.float32)
+            
+        return sample
 
 class CollateLandmarks:
-    """
-    Collate function to pad variable-length landmark sequences and target texts into batches.
-    """
+    """Collate and pad variable-length sequences and texts into batches."""
+    
     def __init__(self, tokenizer: Any = None, max_target_len: int = 30):
-        """
-        Args:
-            tokenizer: Pretrained Hugging Face tokenizer (e.g. T5Tokenizer) to convert text to IDs.
-            max_target_len (int): Maximum token length for target text.
-        """
         self.tokenizer = tokenizer
         self.max_target_len = max_target_len
 
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-        # Extract features and texts
         features = [item['features'] for item in batch]
         texts = [item['text'] for item in batch]
         file_ids = [item['file_id'] for item in batch]
         
-        # Pad features sequence lengths
-        # Each feature tensor has shape (seq_len, feature_dim)
+        # Pad features.
         feature_dim = features[0].shape[1]
         lengths = [len(f) for f in features]
         max_seq_len = max(lengths)
@@ -227,7 +294,6 @@ class CollateLandmarks:
         attention_mask = torch.zeros(len(batch), max_seq_len, dtype=torch.float32)
         
         for i, f in enumerate(features):
-            # Check for feature dimension mismatch in batch
             if f.shape[1] != feature_dim:
                 raise ValueError(
                     f"Feature dimension mismatch in batch! First item has dim {feature_dim}, "
@@ -235,15 +301,26 @@ class CollateLandmarks:
                 )
             seq_len = len(f)
             padded_features[i, :seq_len] = f
-            attention_mask[i, :seq_len] = 1.0  # 1 for valid frames, 0 for pad
+            attention_mask[i, :seq_len] = 1.0
 
         batch_dict = {
-            'input_features': padded_features,    # shape (batch, max_seq_len, feature_dim)
-            'attention_mask': attention_mask,    # shape (batch, max_seq_len)
+            'input_features': padded_features,
+            'attention_mask': attention_mask,
             'file_ids': file_ids
         }
         
-        # Tokenize target text if tokenizer is provided
+        # Pad and align I3D features if present in batch.
+        has_i3d = all('i3d_features' in item for item in batch)
+        if has_i3d:
+            i3d_features = [item['i3d_features'] for item in batch]
+            padded_i3d = torch.zeros(len(batch), max_seq_len, 1024)
+            for i, i3d_f in enumerate(i3d_features):
+                seq_len = len(i3d_f)
+                limit_len = min(seq_len, max_seq_len)
+                padded_i3d[i, :limit_len] = i3d_f[:limit_len]
+            batch_dict['input_i3d_features'] = padded_i3d
+        
+        # Tokenize target text.
         if self.tokenizer is not None:
             tokenized = self.tokenizer(
                 texts,
@@ -252,13 +329,13 @@ class CollateLandmarks:
                 max_length=self.max_target_len,
                 return_tensors="pt"
             )
-            # Replace padding token ID with -100 so PyTorch CrossEntropyLoss ignores it
+            # Ignore pad token index in loss.
             labels = tokenized.input_ids
             labels[labels == self.tokenizer.pad_token_id] = -100
-            batch_dict['labels'] = labels        # shape (batch, max_target_len)
+            batch_dict['labels'] = labels
             batch_dict['decoder_attention_mask'] = tokenized.attention_mask
         else:
-            # Return raw texts if tokenizer is absent (e.g. during testing)
+            # Return raw text when no tokenizer is used.
             batch_dict['labels'] = texts
 
         return batch_dict

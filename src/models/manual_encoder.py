@@ -134,8 +134,8 @@ class ConformerAttentionModule(nn.Module):
         # If all elements in a row are True, set the first element to False.
         if key_padding_mask is not None:
             all_padded = key_padding_mask.all(dim=-1, keepdim=True)
-            first_element_mask = torch.zeros_like(key_padding_mask)
-            first_element_mask[:, 0] = True
+            col_indices = torch.arange(key_padding_mask.size(1), device=key_padding_mask.device)
+            first_element_mask = (col_indices == 0).unsqueeze(0)
             key_padding_mask = key_padding_mask & ~(all_padded & first_element_mask)
         
         # PyTorch MultiheadAttention expects batch_first=True
@@ -177,34 +177,30 @@ class ConformerBlock(nn.Module):
         return x
 
 class PositionalEncoding(nn.Module):
-    """
-    Sinusoidal Positional Encoding for sequence temporal awareness.
-    """
-    def __init__(self, d_model: int, max_len: int = 10000):
+    """Sinusoidal Positional Encoding with dynamic expansion."""
+    def __init__(self, d_model: int, max_len: int = 10000) -> None:
         super().__init__()
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        self.d_model = d_model
+        self._extend_pe(max_len, torch.device("cpu"), torch.float32)
+
+    def _extend_pe(self, length: int, device: torch.device, dtype: torch.dtype) -> None:
+        pe = torch.zeros(length, self.d_model, device=device, dtype=dtype)
+        position = torch.arange(0, length, dtype=dtype, device=device).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.d_model, 2, dtype=dtype, device=device) * (-math.log(10000.0) / self.d_model))
         
-        # Ensure correct shapes in case d_model is odd
         sin_term = torch.sin(position * div_term)
         cos_term = torch.cos(position * div_term)
         
         pe[:, 0::2] = sin_term[:, :pe[:, 0::2].size(1)]
         pe[:, 1::2] = cos_term[:, :pe[:, 1::2].size(1)]
         
-        # Register as buffer so it moves with the model device
         self.register_buffer('pe', pe.unsqueeze(0))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: Input tensor of shape (batch, seq_len, d_model).
-        Returns:
-            Output tensor of shape (batch, seq_len, d_model).
-        """
-        # x shape: (batch, seq_len, d_model)
-        return x + self.pe[:, :x.size(1)]
+        seq_len = x.size(1)
+        if not hasattr(self, 'pe') or self.pe.size(1) < seq_len:
+            self._extend_pe(seq_len, x.device, x.dtype)
+        return x + self.pe[:, :seq_len].to(device=x.device, dtype=x.dtype)
 
 class ConformerEncoder(nn.Module):
     """
@@ -213,14 +209,11 @@ class ConformerEncoder(nn.Module):
     """
     def __init__(self, input_dim: int = 534, d_model: int = 512, num_layers: int = 4, num_heads: int = 4, kernel_size: int = 31, dropout: float = 0.1):
         super().__init__()
-        # 1. Feature Projection Layer
         self.projection = nn.Sequential(
             nn.Linear(input_dim, d_model),
             nn.LayerNorm(d_model)
         )
         
-        # 2. Temporal Pyramidal Downsampling (1D learnable Conv1d replacing MaxPool1d)
-        # Downsamples the sequence length by 2 at the input stage
         self.downsample = nn.Conv1d(
             in_channels=d_model, 
             out_channels=d_model, 
@@ -232,7 +225,6 @@ class ConformerEncoder(nn.Module):
         self.pos_encoding = PositionalEncoding(d_model)
         self.dropout = nn.Dropout(dropout)
         
-        # 3. Conformer Blocks
         self.num_layers = num_layers
         self.blocks = nn.ModuleList([
             ConformerBlock(d_model, num_heads, kernel_size, dropout=dropout)
@@ -240,44 +232,35 @@ class ConformerEncoder(nn.Module):
         ])
         
     def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Optional[torch.BoolTensor]]:
-        """
-        Args:
-            x (Tensor): Landmark features of shape (batch, seq_len, input_dim).
-            attention_mask (Tensor): Mask of shape (batch, seq_len) with 1 for real frames, 0 for pad.
-        Returns:
-            Tuple of:
-                - Output tensor of shape (batch, seq_len // 2, d_model)
-                - Downsampled boolean padding mask of shape (batch, seq_len // 2)
-        """
-        # Guard against completely empty sequence length input
         if x.size(1) == 0:
             raise ValueError(f"Input feature sequence has length 0. Batch size: {x.size(0)}")
             
-        # Feature projection
         x = self.projection(x)
         
-        # Pyramidal Temporal Downsampling
-        # Conv1d expects shape: (batch, channels, seq_len)
+        # Downsample temporally
         x = x.transpose(1, 2)
         x = self.downsample(x)
         x = x.transpose(1, 2)
         
-        # Positional Encoding and Dropout
         x = self.pos_encoding(x)
         x = self.dropout(x)
         
-        # Convert attention_mask (1 for valid, 0 for pad) to PyTorch key_padding_mask (True for pad, False for valid)
-        # Using < 0.5 is more robust across FP16/BF16 than == 0
         key_padding_mask = None
         if attention_mask is not None:
-            valid_mask = attention_mask.float().unsqueeze(1)  # (B, 1, L)
-            downsampled_valid = F.max_pool1d(valid_mask, kernel_size=3, stride=2, padding=1)
-            key_padding_mask = (downsampled_valid.squeeze(1) < 0.5)
-            # Ensure sequence length alignment (handles stride boundary)
-            key_padding_mask = key_padding_mask[:, :x.size(1)]
+            # Downsample attention mask to match the feature downsampling stride (1 for valid, 0 for pad)
+            downsampled_mask = attention_mask[:, ::2]
+            key_padding_mask = (downsampled_mask < 0.5)
+            
+            # Align mask length with features, padding with True (masked) if needed
+            key_padding_mask = key_padding_mask.to(torch.uint8)
+            if key_padding_mask.size(1) < x.size(1):
+                key_padding_mask = F.pad(key_padding_mask, (0, x.size(1) - key_padding_mask.size(1)), value=1)
+            elif key_padding_mask.size(1) > x.size(1):
+                key_padding_mask = key_padding_mask[:, :x.size(1)]
+            key_padding_mask = key_padding_mask.to(torch.bool)
                 
-        # Conformer Blocks forward pass
         for block in self.blocks:
             x = block(x, key_padding_mask=key_padding_mask)
             
         return x, key_padding_mask
+

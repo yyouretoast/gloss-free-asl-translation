@@ -29,7 +29,8 @@ def evaluate(
     no_face: bool = False,
     max_len: int = 150,
     batch_size: int = 8,
-    device: str = "auto"
+    device: str = "auto",
+    i3d_dir: str | None = None
 ) -> None:
     if not jiwer or not sacrebleu:
         print("Error: jiwer and sacrebleu packages are required for evaluation. Run `pip install jiwer sacrebleu`.")
@@ -50,14 +51,15 @@ def evaluate(
         print("Warning: No metadata provided. Evaluation requires target labels.")
         return
         
-    print(f"Loading dataset from: {data_dir}")
+    include_face = not no_face
+    print(f"Loading evaluation dataset from: {data_dir} (include_face={include_face}, i3d_dir={i3d_dir})")
     dataset = ASLLandmarkDataset(
         data_dir=data_dir,
         metadata_dict=metadata,
         max_len=max_len,
-        include_face=not no_face,
-        normalize=True,
-        skip_empty_labels=True
+        include_face=include_face,
+        skip_empty_labels=True,
+        i3d_dir=i3d_dir
     )
     
     if len(dataset) == 0:
@@ -69,16 +71,7 @@ def evaluate(
     
     input_dim = dataset[0]['features'].shape[1]
     
-    print(f"Initializing Model (Conformer -> T5) with input_dim={input_dim}...")
-    model = ASLTranslationModel(
-        input_dim=input_dim,
-        d_model=512,
-        t5_model_name=t5_model_name,
-        num_layers=4,
-        num_heads=4,
-        kernel_size=31
-    )
-    
+    # Load state dict first to dynamically auto-detect if checkpoint was trained with Multi-Stream Gated Fusion
     print(f"Loading checkpoint from: {checkpoint}")
     checkpoint_bin = os.path.join(checkpoint, "pytorch_model.bin")
     checkpoint_safe = os.path.join(checkpoint, "model.safetensors")
@@ -95,7 +88,25 @@ def evaluate(
         state_dict = torch.load(checkpoint_bin, map_location="cpu", weights_only=True)
     else:
         raise FileNotFoundError(f"Neither model.safetensors nor pytorch_model.bin found in {checkpoint}")
-        
+
+    # Strip 'module.' prefix from state dict keys if present
+    state_dict = {k[7:] if k.startswith("module.") else k: v for k, v in state_dict.items()}
+
+    # Inspect state dict keys for multimodal I3D parameters
+    has_i3d_weights = any('i3d_projection' in k or 'gate_conv' in k for k in state_dict.keys())
+    input_i3d_dim = 1024 if has_i3d_weights else None
+    
+    print(f"Initializing Model (Conformer -> T5) with input_dim={input_dim}, input_i3d_dim={input_i3d_dim}...")
+    model = ASLTranslationModel(
+        input_dim=input_dim,
+        input_i3d_dim=input_i3d_dim,
+        d_model=512,
+        t5_model_name=t5_model_name,
+        num_layers=4,
+        num_heads=4,
+        kernel_size=31
+    )
+    
     model.load_state_dict(state_dict)
     
     model = model.to(device)
@@ -111,9 +122,14 @@ def evaluate(
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].numpy()
             
+            i3d_feats = None
+            if 'input_i3d_features' in batch:
+                i3d_feats = batch['input_i3d_features'].to(device)
+                
             output_ids = model.generate(
                 input_features=features,
                 attention_mask=attention_mask,
+                input_i3d_features=i3d_feats,
                 max_new_tokens=30
             )
             
@@ -130,7 +146,10 @@ def evaluate(
     valid_preds = [p if p else " " for p in all_preds]
     valid_labels = [lbl if lbl else " " for lbl in all_labels]
     
-    wer = jiwer.wer(valid_labels, valid_preds)
+    try:
+        wer = jiwer.wer(valid_labels, valid_preds)
+    except Exception:
+        wer = 1.0
     bleu = sacrebleu.corpus_bleu(valid_preds, [valid_labels]).score
     
     print("\n--- Evaluation Results ---")
@@ -148,6 +167,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate ASL translation model.")
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to saved model checkpoint.")
     parser.add_argument("--data-dir", "--data_dir", dest="data_dir", type=str, required=True, help="Directory of landmarks.")
+    parser.add_argument("--i3d-dir", "--i3d_dir", dest="i3d_dir", type=str, default=None, help="Directory of precomputed I3D features.")
     parser.add_argument("--metadata", "--metadata-file", "--metadata_file", dest="metadata", type=str, required=True, help="Path to metadata CSV.")
     parser.add_argument("--t5-model", "--t5_model", dest="t5_model", type=str, default="t5-small", help="T5 model name.")
     parser.add_argument("--no-face", "--no_face", dest="no_face", action="store_true", help="Disable facial expression landmarks.")
@@ -165,7 +185,8 @@ def main() -> None:
         no_face=args.no_face,
         max_len=args.max_len,
         batch_size=args.batch_size,
-        device=args.device
+        device=args.device,
+        i3d_dir=args.i3d_dir
     )
 
 if __name__ == "__main__":

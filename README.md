@@ -1,6 +1,6 @@
 # Gloss-Free ASL-to-English Translation
 
-A deep learning framework to translate American Sign Language (ASL) video coordinates directly into fluent English sentences without using intermediate gloss representations. The project connects a custom **Conformer Encoder** directly to a pretrained **Hugging Face T5 Decoder** to perform end-to-end visual-to-text sequence generation.
+A deep learning framework to translate American Sign Language (ASL) video coordinates directly into fluent English sentences without using intermediate gloss representations. The project connects a custom **Conformer Encoder** directly to a pretrained **Hugging Face T5 Decoder** (supporting `t5-small` or `t5-base`) to perform end-to-end visual-to-text sequence generation. It also optionally incorporates precomputed spatiotemporal features (e.g. from an **I3D network**) via a **Gated Multimodal Fusion** mechanism.
 
 ## Motivation
 
@@ -18,23 +18,27 @@ This is a solo project aimed at building a gloss-free ASL-to-English translation
 
 ```mermaid
 flowchart TD
-    A[MediaPipe Holistic/OpenPose] --> B[Normalization]
-    B --> C[Modality Bridge]
-    C --> D[Conformer Blocks]
-    D --> E[Temporal Downsampling]
-    E --> F[T5 Decoder]
-    F --> G[English Text]
+    A[MediaPipe Holistic Landmarks] --> B[Normalization & Concatenation]
+    B --> C[Linear Projection]
+    C --> D[Temporal Downsampling]
+    D --> E[Conformer Blocks]
+    E --> F[Gated Multimodal Fusion]
+    F --> G[Modality Bridge]
+    G --> H[T5 Decoder]
+    H --> I[English Text]
 ```
 
 ### 1. Robust Coordinates Processing Pipeline
 * **Targeted Landmark Extraction (`src/data_pipeline.py`)**: Uses MediaPipe to extract keypoints across Pose, Face, and Hands. Slices face landmarks to an optimized **92-point facial subset** (eyebrows, eyes, lips) instead of the full 468 points, reducing coordinate dimensionality by **80%** (from 1404 to 276 dimensions) while preserving critical grammatical facial expressions.
 * **Scale & Distance Invariance (`src/dataset.py`)**: Coordinates are geometrically normalized to ensure model invariance to camera distance, signer height, and camera movement.
-* **How2Sign & OpenPose Support (`src/dataset.py`)**: Custom parser to dynamically load OpenPose JSON outputs frame-by-frame. Auto-aligns keypoint layouts (e.g. mapping BODY_25 shoulders vs. MediaPipe landmarks) to handle multiple dataset schemas seamlessly.
+* **How2Sign MediaPipe & I3D Support (`src/dataset.py`)**: Custom dataset loader to dynamically load pre-extracted MediaPipe Holistic `.npy` landmark files and align them with precomputed 1024-dimensional dense spatiotemporal I3D feature vectors.
+* **Data Augmentations**: Evaluates coordinate stability during training using random horizontal mirroring (reversing coordinates and swapping symmetric joints and left/right hands), temporal frame-level jittering (random drop/duplicate), and hand dropout.
 
 ### 2. High-Performance Model Architecture
 * **Hybrid Conformer Encoder (`src/models/manual_encoder.py`)**: Combines multi-head self-attention (global context) with convolutional blocks (local movement details) in 4 Conformer blocks (`d_model=512`, `heads=4`, `kernel_size=31`).
 * **Learnable Temporal Downsampling**: Uses a strided convolutional layer (`stride=2`) rather than max-pooling, allowing the encoder to learn downsampling while retaining continuous movement trajectories.
 * **Rigorous Padding Fixes**: Implements `LayerNorm` (with transpose) instead of standard `BatchNorm1d` within Conformer blocks. This prevents padded zero-tokens in variable-length sequences from biasing batch normalization statistics.
+* **Gated Multimodal Fusion**: Projects and fuses spatiotemporal video features (1024-dim I3D features) with Conformer visual features via a learnable gating channel to dynamically combine structural coordinates and contextual pixel features.
 * **Seamless T5 Cross-Attention Wrapper (`src/train.py`)**: Routes Conformer visual outputs directly to the cross-attention layers of the T5 decoder, bypassing the T5 text encoder completely.
 
 <details>
@@ -47,7 +51,6 @@ To achieve scale and camera distance invariance, frame-level landmarks are norma
    $$w_{\text{shoulder}} = \begin{cases} \|p_{\text{shoulder1}} - p_{\text{shoulder2}}\|_2, & \text{if } \|p_{\text{shoulder1}} - p_{\text{shoulder2}}\|_2 \ge 0.05 \\ 0.25, & \text{otherwise} \end{cases}$$
    
    *For MediaPipe inputs, shoulders are indices `11` and `12`.*
-   *For OpenPose BODY_25 inputs, shoulders are indices `2` and `5`.*
 
 2. **Pose Coordinate Normalization ($p_{\text{norm}}$)**:
    $$p_{\text{norm}} = \frac{p - p_{\text{mid-shoulder}}}{w_{\text{shoulder}}}$$
@@ -67,17 +70,13 @@ To achieve scale and camera distance invariance, frame-level landmarks are norma
 * **Fast Profiler (`src/validate_dataset.py`)**: Evaluates landmark quality (sequence length distribution, hand/face tracking dropout percentages, and frame-to-frame wrist jitter noise) on large directories in seconds using non-recursive directory lists.
 
 ### Feature Dimension Breakdown
-The feature vectors are concatenated per frame into a single 1D tensor depending on the dataset source format:
+The feature vectors are concatenated per frame into a single 1D tensor:
 
-#### A. MediaPipe Holistic Format (e.g. YouTube-ASL)
-* **Face Enabled (Default)**: **534 dimensions**
-  $$\text{Pose (} 33 \times 4 = 132\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} + \text{Face (} 92 \times 3 = 276\text{)} = 534\text{ dims}$$
-* **Face Disabled (`--no_face`)**: **258 dimensions**
-
-#### B. OpenPose BODY_25 Format (e.g. How2Sign)
-* **Face Enabled (Default)**: **411 dimensions**
-  $$\text{Pose (} 25 \times 3 = 75\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} + \text{Face (} 70 \times 3 = 210\text{)} = 411\text{ dims}$$
-* **Face Disabled (`--no_face`)**: **201 dimensions**
+#### MediaPipe Holistic Format (e.g. How2Sign or YouTube-ASL)
+* **Face Enabled (Default)**: **501 dimensions** (when loaded from pre-extracted `.npy` files) or **534 dimensions** (when loaded from `.npz` files).
+  * `.npy` files: $\text{Pose (} 33 \times 3 = 99\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} + \text{Face (} 92 \times 3 = 276\text{)} = 501\text{ dims}$
+  * `.npz` files: $\text{Pose (} 33 \times 4 = 132\text{)} + \text{Left Hand (} 21 \times 3 = 63\text{)} + \text{Right Hand (} 21 \times 3 = 63\text{)} + \text{Face (} 92 \times 3 = 276\text{)} = 534\text{ dims}$
+* **Face Disabled (`--no_face`)**: **225 dimensions** (for `.npy` files) or **258 dimensions** (for `.npz` files).
 
 ## Setup & Usage
 
@@ -92,7 +91,7 @@ The feature vectors are concatenated per frame into a single 1D tensor depending
 │   ├── evaluate.py        # Quantitative evaluation script (BLEU-4 and WER)
 │   ├── export_onnx.py     # Conformer encoder ONNX export utility
 │   ├── inference.py       # Standalone landmark-to-English translation inference script
-│   ├── preprocess_how2sign.py # Preprocesses How2Sign JSONs to compressed .npz
+│   ├── preprocess_how2sign.py # (Deprecated) Preprocessed How2Sign OpenPose JSONs to compressed .npz
 │   └── profile_memory.py  # GPU memory estimator for small/base T5 decoders
 ├── src/                   # Main source code
 │   ├── models/            # Neural network architectures
@@ -105,7 +104,7 @@ The feature vectors are concatenated per frame into a single 1D tensor depending
 │   │   ├── metadata.py    # CSV/TSV metadata parsing logic
 │   │   └── splits.py      # Signer-independent splitting logic
 │   ├── data_pipeline.py   # MediaPipe extractor and formatter
-│   ├── dataset.py         # LandmarkDataset & collators (NPZ + JSON OpenPose)
+│   ├── dataset.py         # LandmarkDataset & collators (MediaPipe Holistic + I3D)
 │   ├── train.py           # Thin orchestrator script for model training
 │   └── validate_dataset.py # Statistics and noise validation script
 ├── tests/                 # Unit and integration tests (using pytest)
@@ -154,8 +153,8 @@ Export Conformer Encoder to ONNX:
 # Default (534 dimensions for MediaPipe format)
 python -m scripts.export_onnx
 
-# Specify dimensions (e.g., 411 dimensions for How2Sign OpenPose format)
-python -m scripts.export_onnx --input-dim 411
+# Specify dimensions if not using the default 534
+python -m scripts.export_onnx --input-dim 501
 ```
 
 ### Running on Kaggle
@@ -163,9 +162,9 @@ python -m scripts.export_onnx --input-dim 411
 To train the model on the **How2Sign** dataset, use the provided `kaggle_training.ipynb` notebook:
 
 1. Create a new notebook on Kaggle.
-2. Add the dataset: **How2Sign Keypoints** (e.g., `nazarboholii/how2sign-keypoints`). 
+2. Add the datasets: **How2Sign Holistic** (e.g., `Pasindu Sewmuthu Abewickrama Singhe/how2sign-holistic`, 44 GB) and **How2Sign I3D Features** (e.g., `how2sign-i3d-features`, 8 GB).
    > [!WARNING]
-   > `nazarboholii/how2sign-keypoints` is a third-party community upload rather than an official release. Before starting full training, verify its completeness (check that train/val/test splits exist and that uploader signer ID metadata matches the CSV splits).
+   > Ensure both datasets are correctly attached and check for uploader/signer ID metadata inside the csv split files to avoid signer leakage.
 3. Import the `kaggle_training.ipynb` file.
 4. Execute the cells sequentially. The first cell will automatically pull down all the latest updates directly from this repository:
    ```python
@@ -173,8 +172,8 @@ To train the model on the **How2Sign** dataset, use the provided `kaggle_trainin
    !git pull
    ```
 5. Choose your training config:
-   * **Full Model (Face Enabled - 411 dimensions)**: Includes critical facial expressions for grammar.
-   * **Ablation Model (No Face - 201 dimensions)**: Ignores facial expressions and trains strictly on body/hand trajectories.
+   * **Full Model (Face Enabled - 534/501 dimensions)**: Includes critical facial expressions for grammar.
+   * **Ablation Model (No Face - 258/225 dimensions)**: Ignores facial expressions and trains strictly on body/hand trajectories.
 
 ### Training Options
 
@@ -182,7 +181,7 @@ The training entry point (`src/train.py`) supports the following customized conf
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `--data_dir` | `str` | `data/landmarks` | Path to coordinate folder (.npz or OpenPose JSONs) |
+| `--data_dir` | `str` | `data/landmarks` | Path to coordinate folder (.npz or .npy) |
 | `--metadata_file` | `str` | `None` | Path to csv uploader metadata for signer-leak proof splits |
 | `--epochs` | `int` | `10` | Total training epochs |
 | `--batch_size` | `int` | `8` | Size of training batches |

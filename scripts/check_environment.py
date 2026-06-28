@@ -18,7 +18,12 @@ def check_mediapipe() -> None:
     print("--- MediaPipe Check ---")
     try:
         import mediapipe as mp
-        print(f"MediaPipe Version: {mp.__version__}")
+        import importlib.metadata
+        try:
+            version = importlib.metadata.version("mediapipe")
+        except importlib.metadata.PackageNotFoundError:
+            version = getattr(mp, "__version__", "unknown")
+        print(f"MediaPipe Version: {version}")
         print("MediaPipe imported successfully.")
     except ImportError as e:
         print(f"Failed to import MediaPipe: {e}")

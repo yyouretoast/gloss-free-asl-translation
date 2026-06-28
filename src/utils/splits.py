@@ -10,9 +10,7 @@ from collections import defaultdict
 from typing import List, Dict, Tuple
 
 def split_by_signer(filepaths: List[str], video_to_signer: Dict[str, str]) -> Tuple[List[str], List[str]]:
-    """
-    Partitions files strictly by Signer ID (Signer-Independent splits).
-    """
+    """Partition files strictly by Signer ID (Signer-Independent splits)."""
     signer_groups = defaultdict(list)
     unknown_files = []
     
@@ -20,14 +18,14 @@ def split_by_signer(filepaths: List[str], video_to_signer: Dict[str, str]) -> Tu
         basename = os.path.splitext(os.path.basename(filepath))[0]
         signer_id = None
         
-        # Try to retrieve signer from metadata mapping
+        # Try metadata mapping.
         if basename in video_to_signer:
             signer_id = str(video_to_signer[basename]).strip()
             
-        # Try to infer from filename prefix (e.g. "signer01_video_0000" -> "signer01")
+        # Infer from filename prefix.
         if not signer_id:
             parts = basename.split('_')
-            if len(parts) > 1 and (parts[0].isalnum() or 'signer' in parts[0].lower() or 'channel' in parts[0].lower()):
+            if len(parts) > 1 and parts[0].isalnum() and parts[0].lower() not in ['video', 'sentence', 'segment', 'clip']:
                 signer_id = parts[0]
                 
         if signer_id and signer_id.lower() != 'unknown':
@@ -42,25 +40,23 @@ def split_by_signer(filepaths: List[str], video_to_signer: Dict[str, str]) -> Tu
     if len(sorted_signers) > 0:
         total_known_count = sum(len(signer_groups[s]) for s in sorted_signers)
         
-        # Sort signers by dataset size descending to make the split more balanced
+        # Sort signers by size descending for a more balanced split.
         sorted_signers_by_size = sorted(sorted_signers, key=lambda s: len(signer_groups[s]), reverse=True)
         
         for signer in sorted_signers_by_size:
             files = signer_groups[signer]
-            # Greedily allocate signers to train/val to keep ratios close to 80/20,
-            # ensuring validation doesn't end up empty or heavily starved.
+            # Greedily allocate signers to maintain ~80/20 train/val ratio.
             if len(train_files) == 0 or (len(train_files) + len(files)) / total_known_count <= 0.85:
                 train_files.extend(files)
             else:
                 val_files.extend(files)
                 
-        # Drop unknown-signer files from validation/evaluation entirely to prevent leakage
+        # Place unknown-signer files in training to avoid validation leakage.
         train_files.extend(unknown_files)
         
-        # Safeguard: if there is only 1 signer or val_files is empty, split train_files to populate it
+        # Split training if validation set is empty.
         if len(val_files) == 0 and len(train_files) > 1:
             print("\nWARNING: Signer-based split left validation set empty. Splitting train files 80/20 to populate validation.")
-            # Use deterministic seed for reproducibility
             rng = random.Random(42)
             shuffled_train = list(train_files)
             rng.shuffle(shuffled_train)
@@ -70,7 +66,7 @@ def split_by_signer(filepaths: List[str], video_to_signer: Dict[str, str]) -> Tu
             
         print(f"Signer splits: {len(train_files)} train (includes {len(unknown_files)} unknown-signer clips), {len(val_files)} validation files.")
     else:
-        # Fallback to standard random split if no signer proxy info is available
+        # Fallback to random split if signer info is unavailable.
         print("\n" + "="*80)
         print("WARNING: No signer, channel, or uploader metadata found in filenames or CSV columns.")
         print("Falling back to standard random split. Note: validation metrics may suffer from signer data leakage.")

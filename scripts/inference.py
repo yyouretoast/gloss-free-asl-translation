@@ -20,7 +20,8 @@ def run_inference(
     t5_model_name: str = "t5-small",
     no_face: bool = False,
     max_len: int = 150,
-    device: str = "auto"
+    device: str = "auto",
+    i3d_dir: str | None = None
 ) -> None:
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -28,7 +29,7 @@ def run_inference(
     print(f"Loading tokenizer: {t5_model_name}")
     tokenizer = T5TokenizerFast.from_pretrained(t5_model_name)
     
-    print("Loading dataset...")
+    print(f"Loading dataset (i3d_dir={i3d_dir})...")
     # Create dataset just to load features properly using the existing logic
     dataset = ASLLandmarkDataset(
         data_dir="", # Unused when file_list is provided
@@ -36,7 +37,8 @@ def run_inference(
         max_len=max_len,
         include_face=not no_face,
         normalize=True,
-        skip_empty_labels=False
+        skip_empty_labels=False,
+        i3d_dir=i3d_dir
     )
     
     if len(dataset) == 0:
@@ -45,16 +47,7 @@ def run_inference(
         
     input_dim = dataset[0]['features'].shape[1]
     
-    print(f"Initializing Model (Conformer -> T5) with input_dim={input_dim}...")
-    model = ASLTranslationModel(
-        input_dim=input_dim,
-        d_model=512,
-        t5_model_name=t5_model_name,
-        num_layers=4,
-        num_heads=4,
-        kernel_size=31
-    )
-    
+    # Load state dict first to dynamically auto-detect if checkpoint was trained with Multi-Stream Gated Fusion
     print(f"Loading checkpoint from: {checkpoint}")
     checkpoint_bin = os.path.join(checkpoint, "pytorch_model.bin")
     checkpoint_safe = os.path.join(checkpoint, "model.safetensors")
@@ -71,7 +64,25 @@ def run_inference(
         state_dict = torch.load(checkpoint_bin, map_location="cpu", weights_only=True)
     else:
         raise FileNotFoundError(f"Neither model.safetensors nor pytorch_model.bin found in {checkpoint}")
-        
+
+    # Strip 'module.' prefix from state dict keys if present
+    state_dict = {k[7:] if k.startswith("module.") else k: v for k, v in state_dict.items()}
+
+    # Inspect state dict keys for multimodal I3D parameters
+    has_i3d_weights = any('i3d_projection' in k or 'gate_conv' in k for k in state_dict.keys())
+    input_i3d_dim = 1024 if has_i3d_weights else None
+    
+    print(f"Initializing Model (Conformer -> T5) with input_dim={input_dim}, input_i3d_dim={input_i3d_dim}...")
+    model = ASLTranslationModel(
+        input_dim=input_dim,
+        input_i3d_dim=input_i3d_dim,
+        d_model=512,
+        t5_model_name=t5_model_name,
+        num_layers=4,
+        num_heads=4,
+        kernel_size=31
+    )
+    
     model.load_state_dict(state_dict)
     
     model = model.to(device)
@@ -84,9 +95,14 @@ def run_inference(
             features = sample['features'].unsqueeze(0).to(device)
             attention_mask = torch.ones((1, features.shape[1]), dtype=torch.float32, device=device)
             
+            i3d_feats = None
+            if 'i3d_features' in sample:
+                i3d_feats = sample['i3d_features'].unsqueeze(0).to(device)
+                
             output_ids = model.generate(
                 input_features=features,
                 attention_mask=attention_mask,
+                input_i3d_features=i3d_feats,
                 max_new_tokens=30
             )
             
@@ -98,6 +114,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to saved model checkpoint.")
     parser.add_argument("--input", type=str, help="Path to single .npz or OpenPose dir.")
     parser.add_argument("--input-dir", "--input_dir", dest="input_dir", type=str, help="Directory of landmarks.")
+    parser.add_argument("--i3d-dir", "--i3d_dir", dest="i3d_dir", type=str, default=None, help="Directory of precomputed I3D features.")
     parser.add_argument("--limit", type=int, default=10, help="Max samples to process from directory.")
     parser.add_argument("--t5-model", "--t5_model", dest="t5_model", type=str, default="t5-small", help="T5 model name.")
     parser.add_argument("--no-face", "--no_face", dest="no_face", action="store_true", help="Disable facial expression landmarks.")
@@ -123,7 +140,8 @@ def main() -> None:
         t5_model_name=args.t5_model,
         no_face=args.no_face,
         max_len=args.max_len,
-        device=args.device
+        device=args.device,
+        i3d_dir=args.i3d_dir
     )
 
 if __name__ == "__main__":

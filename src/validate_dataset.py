@@ -88,17 +88,25 @@ def analyze_single_file(file_path: str) -> Optional[Dict[str, Any]]:
             return None
     else:
         try:
-            with np.load(file_path) as data:
-                # Check keys
-                required_keys = {'pose', 'left_hand', 'right_hand', 'face'}
-                if not required_keys.issubset(data.files):
-                    print(f"Warning: {file_path} is missing keys. Found: {list(data.files)}")
-                    return None
+            if file_path.endswith('.npy'):
+                from src.utils.io_utils import load_holistic_npy
+                landmarks = load_holistic_npy(file_path)
+                pose = landmarks['pose']
+                left_hand = landmarks['left_hand']
+                right_hand = landmarks['right_hand']
+                face = landmarks['face']
+            else:
+                with np.load(file_path) as data:
+                    # Check keys
+                    required_keys = {'pose', 'left_hand', 'right_hand', 'face'}
+                    if not required_keys.issubset(data.files):
+                        print(f"Warning: {file_path} is missing keys. Found: {list(data.files)}")
+                        return None
 
-                pose = data['pose']
-                left_hand = data['left_hand']
-                right_hand = data['right_hand']
-                face = data['face']
+                    pose = data['pose']
+                    left_hand = data['left_hand']
+                    right_hand = data['right_hand']
+                    face = data['face']
         except (IOError, OSError, ValueError, KeyError) as e:
             import warnings
             warnings.warn(f"Skipping {file_path}: {e}")

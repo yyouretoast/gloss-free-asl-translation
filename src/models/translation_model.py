@@ -22,6 +22,7 @@ class ASLTranslationModel(nn.Module):
     def __init__(
         self, 
         input_dim: int = 534, 
+        input_i3d_dim: Optional[int] = None,
         d_model: int = 512, 
         t5_model_name: str = 't5-small', 
         num_layers: int = 4, 
@@ -43,8 +44,26 @@ class ASLTranslationModel(nn.Module):
         
         # Delete unused T5 encoder to save VRAM
         del self.t5.encoder
+        
+        # Define I3D projection and temporal downsampling (if configured)
+        self.input_i3d_dim = input_i3d_dim
+        if input_i3d_dim:
+            self.i3d_projection = nn.Conv1d(
+                in_channels=input_i3d_dim,
+                out_channels=d_model,
+                kernel_size=3,
+                stride=2,
+                padding=1
+            )
+            # Gated fusion layers using a 1D temporal convolution (3-frame window)
+            self.gate_conv = nn.Conv1d(
+                in_channels=2 * d_model,
+                out_channels=d_model,
+                kernel_size=3,
+                padding=1
+            )
             
-        # T5-Small d_model is 512, T5-Base is 768
+        # T5-Small d_model is 512, T5-Base is 768, T5-Large is 1024
         t5_d_model = self.t5.config.d_model
         
         # Non-Linear MLP Modality Bridge to project Conformer features to text embedding space
@@ -63,11 +82,28 @@ class ASLTranslationModel(nn.Module):
         attention_mask: Optional[torch.Tensor] = None, 
         labels: Optional[torch.Tensor] = None, 
         decoder_attention_mask: Optional[torch.Tensor] = None, 
+        input_i3d_features: Optional[torch.Tensor] = None,
         **kwargs: Any
     ) -> Any:
         # Extract visual sequence representation
         # outputs shape: (batch, seq_len // 2, d_model)
         outputs, downsampled_mask = self.encoder(input_features, attention_mask=attention_mask)
+        
+        # Gated Multimodal Fusion (if I3D features are present)
+        if input_i3d_features is not None and self.input_i3d_dim is not None:
+            import torch.nn.functional as F
+            # Shape: (batch, seq_len_i3d // 2, d_model)
+            i3d_proj = self.i3d_projection(input_i3d_features.transpose(1, 2)).transpose(1, 2)
+            
+            # Align downsampled sequence lengths exactly without python branching (ONNX compatible)
+            i3d_proj = F.pad(i3d_proj, (0, 0, 0, outputs.size(1)))[:, :outputs.size(1), :]
+                
+            # Compute temporal gate over moving window
+            combined = torch.cat([outputs, i3d_proj], dim=-1) # (B, seq_len // 2, 2 * d_model)
+            gate = torch.sigmoid(self.gate_conv(combined.transpose(1, 2)).transpose(1, 2)) # (B, seq_len // 2, d_model)
+            
+            # Apply gated fusion blending
+            outputs = gate * outputs + (1.0 - gate) * i3d_proj
         
         # Project dimensions using the MLP bridge
         outputs = self.modality_bridge(outputs)
@@ -75,12 +111,16 @@ class ASLTranslationModel(nn.Module):
         # Pass visual embeddings directly as T5 encoder output hidden states
         encoder_outputs = BaseModelOutput(last_hidden_state=outputs)
         
-        # T5 expects 1/True for valid, 0/False for padding frames
         t5_attention_mask = None
         if downsampled_mask is not None:
-            t5_attention_mask = (~downsampled_mask).long()
-            # Force the first token to be active to prevent cross-attention NaNs inside T5
-            t5_attention_mask[:, 0] = 1
+            valid_mask = (~downsampled_mask).long()
+            if valid_mask.size(1) > 0:
+                t5_attention_mask = torch.cat([
+                    torch.ones((valid_mask.size(0), 1), dtype=valid_mask.dtype, device=valid_mask.device),
+                    valid_mask[:, 1:]
+                ], dim=1)
+            else:
+                t5_attention_mask = valid_mask
         
         # Run T5 Decoder forward pass
         return self.t5(
@@ -94,6 +134,7 @@ class ASLTranslationModel(nn.Module):
         self, 
         input_features: torch.Tensor, 
         attention_mask: Optional[torch.Tensor] = None, 
+        input_i3d_features: Optional[torch.Tensor] = None,
         **kwargs: Any
     ) -> Any:
         """
@@ -102,14 +143,32 @@ class ASLTranslationModel(nn.Module):
         """
         with torch.no_grad():
             outputs, downsampled_mask = self.encoder(input_features, attention_mask=attention_mask)
+            
+            # Gated Multimodal Fusion (if I3D features are present)
+            if input_i3d_features is not None and self.input_i3d_dim is not None:
+                import torch.nn.functional as F
+                i3d_proj = self.i3d_projection(input_i3d_features.transpose(1, 2)).transpose(1, 2)
+                
+                # Align downsampled sequence lengths exactly without python branching (ONNX compatible)
+                i3d_proj = F.pad(i3d_proj, (0, 0, 0, outputs.size(1)))[:, :outputs.size(1), :]
+                    
+                combined = torch.cat([outputs, i3d_proj], dim=-1)
+                gate = torch.sigmoid(self.gate_conv(combined.transpose(1, 2)).transpose(1, 2))
+                outputs = gate * outputs + (1.0 - gate) * i3d_proj
+
             outputs = self.modality_bridge(outputs)
             encoder_outputs = BaseModelOutput(last_hidden_state=outputs)
             
-            # T5 expects 1/True for valid, 0/False for padding frames
             t5_attention_mask = None
             if downsampled_mask is not None:
-                t5_attention_mask = (~downsampled_mask).long()
-                t5_attention_mask[:, 0] = 1
+                valid_mask = (~downsampled_mask).long()
+                if valid_mask.size(1) > 0:
+                    t5_attention_mask = torch.cat([
+                        torch.ones((valid_mask.size(0), 1), dtype=valid_mask.dtype, device=valid_mask.device),
+                        valid_mask[:, 1:]
+                    ], dim=1)
+                else:
+                    t5_attention_mask = valid_mask
             
             # Clean kwargs that are not accepted by T5's generate method
             kwargs.pop('file_ids', None)
@@ -130,6 +189,8 @@ class ASLTranslationModel(nn.Module):
         a RuntimeError about shared memory tensors (like T5 embed_tokens/shared weights).
         """
         sd = super().state_dict(*args, destination=destination, prefix=prefix, keep_vars=keep_vars)
+        if keep_vars:
+            return sd
         # Clone to prevent shared parameter issues in safetensors
         cloned_sd = OrderedDict((k, v.clone()) for k, v in sd.items())
         if destination is not None:

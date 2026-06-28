@@ -26,7 +26,8 @@ from src.utils.splits import split_by_signer
 
 def main():
     parser = argparse.ArgumentParser(description="Train ASL Landmark to English translation model.")
-    parser.add_argument("--data_dir", "--data-dir", dest="data_dir", type=str, default="data/landmarks", help="Path to landmark .npz directory")
+    parser.add_argument("--data_dir", "--data-dir", dest="data_dir", type=str, default="data/landmarks", help="Path to landmark directory")
+    parser.add_argument("--i3d_dir", "--i3d-dir", dest="i3d_dir", type=str, default=None, help="Path to precomputed I3D feature directory (enables Multi-Stream Gated Fusion)")
     parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
     parser.add_argument("--batch_size", "--batch-size", dest="batch_size", type=int, default=8, help="Batch size per device")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
@@ -36,7 +37,7 @@ def main():
     parser.add_argument("--max_len", "--max-len", dest="max_len", type=int, default=150, help="Maximum frame sequence length (caps longer sequences to prevent OOM)")
     parser.add_argument("--max_target_len", "--max-target-len", dest="max_target_len", type=int, default=30, help="Maximum target text sequence token length")
     parser.add_argument("--resume_from_checkpoint", "--resume-from-checkpoint", dest="resume_from_checkpoint", type=str, default=None, help="Path to checkpoint folder to resume training from, or 'latest' to auto-detect")
-    parser.add_argument("--t5_model", "--t5-model", dest="t5_model", type=str, default="t5-small", help="Hugging Face T5 decoder checkpoint (t5-small or t5-base)")
+    parser.add_argument("--t5_model", "--t5-model", dest="t5_model", type=str, default="t5-base", help="Hugging Face T5 decoder checkpoint (t5-small or t5-base)")
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -52,12 +53,13 @@ def main():
 
     # 3. Create complete Dataset to extract file list
     include_face = not args.no_face
-    print(f"Loading dataset from: {args.data_dir} (include_face={include_face})")
+    print(f"Loading dataset from: {args.data_dir} (include_face={include_face}, i3d_dir={args.i3d_dir})")
     full_dataset = ASLLandmarkDataset(
         data_dir=args.data_dir,
         metadata_dict=metadata,
         max_len=args.max_len,
-        include_face=include_face
+        include_face=include_face,
+        i3d_dir=args.i3d_dir
     )
     
     if len(full_dataset) == 0:
@@ -71,14 +73,16 @@ def main():
         metadata_dict=metadata,
         file_list=train_files,
         max_len=args.max_len,
-        include_face=include_face
+        include_face=include_face,
+        i3d_dir=args.i3d_dir
     )
     val_dataset = ASLLandmarkDataset(
         data_dir=args.data_dir,
         metadata_dict=metadata,
         file_list=val_files,
         max_len=args.max_len,
-        include_face=include_face
+        include_face=include_face,
+        i3d_dir=args.i3d_dir
     )
 
     # 5. Collator
@@ -88,9 +92,11 @@ def main():
     # 6. Initialize Model dynamically using input shape
     sample_batch = train_dataset[0]
     input_dim = sample_batch['features'].shape[1]
-    print(f"Initializing Model (Conformer -> T5-Small) with input_dim={input_dim}...")
+    input_i3d_dim = 1024 if args.i3d_dir is not None else None
+    print(f"Initializing Model (Conformer -> T5) with input_dim={input_dim}, input_i3d_dim={input_i3d_dim}...")
     model = ASLTranslationModel(
         input_dim=input_dim,
+        input_i3d_dim=input_i3d_dim,
         d_model=512,
         t5_model_name=t5_model_name,
         num_layers=4,
@@ -124,13 +130,14 @@ def main():
         save_total_limit=3,          # Limits checkpoints to keep only the 3 most recent, preventing disk overflow
         predict_with_generate=True,  # Enables generating actual text during eval
         generation_max_length=30,    # Added per requirements
+        generation_num_beams=5,      # Enable 5-beam search during validation evaluation
         fp16=torch.cuda.is_available(), # Use mixed precision if GPU available
         report_to="none",  # Prevents wandb prompts on Kaggle
         remove_unused_columns=False,
         warmup_steps=warmup_steps,    # Dynamic warmup steps to stabilize training early
-        load_best_model_at_end=True,  # Added per requirements
-        metric_for_best_model="wer",  # Added per requirements
-        greater_is_better=False,      # Tells HF that lower WER is better to prevent premature early stopping
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",  # Use loss instead of WER — WER stays flat at ~1.0 for many early epochs and triggers premature early stopping
+        greater_is_better=False,
         
         # --- Performance & Memory Enhancements ---
         optim="adafactor",                  # Native T5 optimizer, saves massive VRAM
@@ -162,7 +169,10 @@ def main():
         decoded_preds = [p if p else " " for p in decoded_preds]
         decoded_labels = [lbl if lbl else " " for lbl in decoded_labels]
         
-        wer = jiwer.wer(decoded_labels, decoded_preds)
+        try:
+            wer = jiwer.wer(decoded_labels, decoded_preds)
+        except Exception:
+            wer = 1.0
         bleu = sacrebleu.corpus_bleu(decoded_preds, [decoded_labels]).score
         
         return {
@@ -170,42 +180,45 @@ def main():
             "wer": float(wer)
         }
 
-    # Group parameters for differential learning rates (1e-4 for Conformer/Bridge, 1e-5 for T5 Decoder)
-    no_decay = ["bias", "LayerNorm.weight"]
-    optimizer_grouped_parameters = [
-        {
-            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay) and "t5" not in n],
-            "weight_decay": 0.01,
-            "lr": args.lr,
-        },
-        {
-            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay) and "t5" not in n],
-            "weight_decay": 0.0,
-            "lr": args.lr,
-        },
-        {
-            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay) and "t5" in n],
-            "weight_decay": 0.01,
-            "lr": args.lr * 0.1,  # 10x smaller learning rate for T5 decoder parameters
-        },
-        {
-            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay) and "t5" in n],
-            "weight_decay": 0.0,
-            "lr": args.lr * 0.1,  # 10x smaller learning rate for T5 decoder parameters
-        },
-    ]
-    
-    from transformers.optimization import Adafactor
-    optimizer = Adafactor(
-        optimizer_grouped_parameters,
-        scale_parameter=False,
-        relative_step=False,
-        warmup_init=False,
-        lr=args.lr
-    )
+    # 8. Define subclassed Trainer to create optimizer dynamically (preserving checkpoint resumability)
+    class CustomSeq2SeqTrainer(Seq2SeqTrainer):
+        def create_optimizer(self):
+            if self.optimizer is None:
+                decay_parameters = self.get_decay_parameter_names(self.model)
+                optimizer_grouped_parameters = [
+                    {
+                        "params": [p for n, p in self.model.named_parameters() if p.requires_grad and n in decay_parameters and "t5" not in n],
+                        "weight_decay": self.args.weight_decay,
+                        "lr": self.args.learning_rate,
+                    },
+                    {
+                        "params": [p for n, p in self.model.named_parameters() if p.requires_grad and n not in decay_parameters and "t5" not in n],
+                        "weight_decay": 0.0,
+                        "lr": self.args.learning_rate,
+                    },
+                    {
+                        "params": [p for n, p in self.model.named_parameters() if p.requires_grad and n in decay_parameters and "t5" in n],
+                        "weight_decay": self.args.weight_decay,
+                        "lr": self.args.learning_rate * 0.1,
+                    },
+                    {
+                        "params": [p for n, p in self.model.named_parameters() if p.requires_grad and n not in decay_parameters and "t5" in n],
+                        "weight_decay": 0.0,
+                        "lr": self.args.learning_rate * 0.1,
+                    },
+                ]
+                from transformers.optimization import Adafactor
+                self.optimizer = Adafactor(
+                    optimizer_grouped_parameters,
+                    scale_parameter=False,
+                    relative_step=False,
+                    warmup_init=False,
+                    lr=self.args.learning_rate
+                )
+            return self.optimizer
 
     # 9. Initialize Trainer
-    trainer = Seq2SeqTrainer(
+    trainer = CustomSeq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -213,8 +226,7 @@ def main():
         data_collator=collate_fn,
         processing_class=tokenizer,
         compute_metrics=compute_metrics,
-        optimizers=(optimizer, None),
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=10)]
     )
 
     # 10. Start Training Loop
