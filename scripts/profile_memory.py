@@ -100,6 +100,11 @@ def main() -> None:
         model_name="t5-base", batch_size=4, seq_len=150, target_len=30, d_model=768
     )
 
+    # Profile t5-large (d_model=1024)
+    profile_model_memory(
+        model_name="t5-large", batch_size=2, seq_len=150, target_len=30, d_model=1024
+    )
+
 
 if __name__ == "__main__":
     main()
