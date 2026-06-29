@@ -186,10 +186,20 @@ class ASLLandmarkDataset(Dataset):
         if self.i3d_dir:
             from src.utils.io_utils import load_i3d_npy
 
-            i3d_basename = basename.replace("_holistic", "").replace("_landmarks", "")
+            # Convert landmark basename to I3D naming convention (e.g. video_id_front_holistic -> video_id-rgb_front)
+            clean = basename.replace("_holistic", "").replace("_landmarks", "")
+            view = "front" if "front" in clean.lower() else "side"
+            sentence_name = clean.replace("_front", "").replace("_side", "")
+            i3d_basename = f"{sentence_name}-rgb_{view}"
+
             i3d_path = self.i3d_file_map.get(i3d_basename)
             if i3d_path is None:
-                i3d_path = os.path.join(self.i3d_dir, f"{i3d_basename}.npy")
+                # Fallback to standard clean name or raw name lookup
+                i3d_path = self.i3d_file_map.get(clean)
+            if i3d_path is None:
+                i3d_path = self.i3d_file_map.get(basename)
+            if i3d_path is None:
+                i3d_path = os.path.join(self.i3d_dir, f"{clean}.npy")
             try:
                 i3d_features = load_i3d_npy(i3d_path)
             except Exception as e:
