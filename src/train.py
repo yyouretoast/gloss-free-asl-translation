@@ -44,7 +44,15 @@ def main():
         dest="i3d_dir",
         type=str,
         default=None,
-        help="Path to precomputed I3D feature directory (enables Multi-Stream Gated Fusion)",
+        help="Path to precomputed training I3D feature directory (enables Multi-Stream Gated Fusion)",
+    )
+    parser.add_argument(
+        "--i3d_val_dir",
+        "--i3d-val-dir",
+        dest="i3d_val_dir",
+        type=str,
+        default=None,
+        help="Path to precomputed validation I3D feature directory (defaults to --i3d_dir)",
     )
     parser.add_argument(
         "--epochs", type=int, default=10, help="Number of training epochs"
@@ -159,7 +167,7 @@ def main():
         file_list=val_files,
         max_len=args.max_len,
         include_face=include_face,
-        i3d_dir=args.i3d_dir,
+        i3d_dir=args.i3d_val_dir if args.i3d_val_dir is not None else args.i3d_dir,
     )
 
     # 5. Collator
