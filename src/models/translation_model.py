@@ -107,7 +107,14 @@ class ASLTranslationModel(nn.Module):
         i3d_proj = self.i3d_act(i3d_proj)
 
         # Align downsampled sequence lengths exactly without python branching (ONNX compatible)
-        i3d_proj = F.pad(i3d_proj, (0, 0, 0, outputs.size(1)))[:, : outputs.size(1), :]
+        diff = outputs.size(1) - i3d_proj.size(1)
+        if isinstance(diff, int):
+            if diff > 0:
+                i3d_proj = F.pad(i3d_proj, (0, 0, 0, diff))
+        else:
+            # Fall back to trace-safe full padding during ONNX symbolic tracing
+            i3d_proj = F.pad(i3d_proj, (0, 0, 0, outputs.size(1)))
+        i3d_proj = i3d_proj[:, : outputs.size(1), :]
 
         # Zero-mask padded positions in I3D projection to avoid boundary leakage during convolution
         if downsampled_mask is not None:

@@ -148,6 +148,10 @@ Run a local dry-run training pass (executes 1 epoch on mock data):
 python -m src.train --epochs 1 --batch_size 2
 ```
 Export Conformer Encoder to ONNX:
+
+> [!NOTE]
+> The Conformer encoder is exported to ONNX for efficient edge feature extraction; T5 decoding requires server-side inference (as the T5 autoregressive decoder contains dynamic loops and control flows that cannot be ONNX-traced).
+
 ```bash
 # Default (501 dimensions for MediaPipe Holistic format)
 python -m scripts.export_onnx

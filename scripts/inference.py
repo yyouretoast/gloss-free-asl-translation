@@ -162,7 +162,7 @@ def main() -> None:
         dest="t5_model",
         type=str,
         default="t5-small",
-        help="T5 model name.",
+        help="T5 model name (e.g., t5-small, t5-base, or t5-large).",
     )
     parser.add_argument(
         "--no-face",

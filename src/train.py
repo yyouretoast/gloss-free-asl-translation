@@ -111,7 +111,7 @@ def main():
         dest="t5_model",
         type=str,
         default="t5-small",
-        help="Hugging Face T5 decoder checkpoint (t5-small or t5-base)",
+        help="Hugging Face T5 decoder checkpoint (t5-small, t5-base, or t5-large)",
     )
     args = parser.parse_args()
 
@@ -204,7 +204,7 @@ def main():
         save_total_limit=3,  # Limits checkpoints to keep only the 3 most recent, preventing disk overflow
         predict_with_generate=True,  # Enables generating actual text during eval
         generation_max_length=30,  # Added per requirements
-        generation_num_beams=5,  # Enable 5-beam search during validation evaluation
+        generation_num_beams=1,  # Enable greedy search (beam width 1) during training validation to speed up evaluation epochs
         fp16=torch.cuda.is_available(),  # Use mixed precision if GPU available
         report_to="none",  # Prevents wandb prompts on Kaggle
         remove_unused_columns=False,
