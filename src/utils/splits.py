@@ -33,7 +33,8 @@ def split_by_signer(
             if (
                 len(parts) > 1
                 and parts[0].isalnum()
-                and parts[0].lower() not in [
+                and parts[0].lower()
+                not in [
                     "video",
                     "sentence",
                     "segment",
