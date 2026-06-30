@@ -21,6 +21,7 @@ class ASLLandmarkDataset(Dataset):
         normalize: bool = True,
         skip_empty_labels: bool = True,
         i3d_dir: Optional[str] = None,
+        training: bool = False,
     ):
         self.data_dir = data_dir
         self.metadata_dict = metadata_dict if metadata_dict is not None else {}
@@ -28,6 +29,7 @@ class ASLLandmarkDataset(Dataset):
         self.include_face = include_face
         self.normalize = normalize
         self.i3d_dir = i3d_dir
+        self.is_training = training
 
         self.i3d_file_map = {}
         if i3d_dir:
@@ -41,13 +43,6 @@ class ASLLandmarkDataset(Dataset):
                             .replace("_landmarks", "")
                         )
                         self.i3d_file_map[bname] = os.path.join(root, f)
-
-        # Identify if dataset is for training to enable augmentations.
-        self.is_training = False
-        if data_dir and "train" in data_dir.lower():
-            self.is_training = True
-        elif file_list and any("train" in fp.lower() for fp in file_list):
-            self.is_training = True
 
         if file_list is not None:
             self.filepaths = file_list
@@ -141,10 +136,10 @@ class ASLLandmarkDataset(Dataset):
 
         return norm_pose, norm_left_hand, norm_right_hand, norm_face
 
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
-        file_path = self.filepaths[idx]
-        basename = os.path.splitext(os.path.basename(file_path))[0]
-
+    def _load_landmarks(
+        self, file_path: str
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, bool]:
+        """Loads pose, left hand, right hand, and face landmarks from file, returning fallbacks on failure."""
         load_failed = False
         try:
             if file_path.endswith(".npy"):
@@ -174,181 +169,212 @@ class ASLLandmarkDataset(Dataset):
             load_failed = True
 
         if load_failed:
-            # Fallback to dummy zero frame to prevent pipeline crashes.
             pose = np.zeros((1, 33, 3), dtype=np.float32)
             left_hand = np.zeros((1, 21, 3), dtype=np.float32)
             right_hand = np.zeros((1, 21, 3), dtype=np.float32)
             face = np.zeros((1, 92, 3), dtype=np.float32)
             num_frames = 1
 
-        # Load and align I3D features if present.
-        i3d_features = None
-        if self.i3d_dir:
-            from src.utils.io_utils import load_i3d_npy
+        return pose, left_hand, right_hand, face, num_frames, load_failed
 
-            # Convert landmark basename to I3D naming convention (e.g. video_id_front_holistic -> video_id-rgb_front)
-            clean = basename.replace("_holistic", "").replace("_landmarks", "")
-            view = "front" if "front" in clean.lower() else "side"
-            sentence_name = clean.replace("_front", "").replace("_side", "")
-            i3d_basename = f"{sentence_name}-rgb_{view}"
+    def _load_and_align_i3d(self, basename: str, num_frames: int) -> np.ndarray | None:
+        """Loads and aligns precomputed I3D features matching sequence length."""
+        if not self.i3d_dir:
+            return None
 
-            i3d_path = self.i3d_file_map.get(i3d_basename)
-            if i3d_path is None:
-                # Fallback to standard clean name or raw name lookup
-                i3d_path = self.i3d_file_map.get(clean)
-            if i3d_path is None:
-                i3d_path = self.i3d_file_map.get(basename)
-            if i3d_path is None:
-                i3d_path = os.path.join(self.i3d_dir, f"{clean}.npy")
-            try:
-                i3d_features = load_i3d_npy(i3d_path)
-            except Exception as e:
-                import warnings
+        from src.utils.io_utils import load_i3d_npy
 
-                warnings.warn(
-                    f"Failed to load I3D file {i3d_path}: {e}. Returning dummy zeros."
-                )
-                i3d_features = np.zeros((num_frames, 1024), dtype=np.float32)
+        # Convert landmark basename to I3D naming convention (e.g. video_id_front_holistic -> video_id-rgb_front)
+        clean = basename.replace("_holistic", "").replace("_landmarks", "")
+        view = "front" if "front" in clean.lower() else "side"
+        sentence_name = clean.replace("_front", "").replace("_side", "")
+        i3d_basename = f"{sentence_name}-rgb_{view}"
 
-            # Align sequence length via interpolation.
-            if i3d_features.shape[0] == 0:
-                i3d_features = np.zeros((num_frames, 1024), dtype=np.float32)
-            elif num_frames <= 1 or i3d_features.shape[0] <= 1:
-                i3d_features = np.tile(i3d_features[0], (num_frames, 1))
-            elif i3d_features.shape[0] != num_frames:
-                old_x = np.linspace(0, 1, i3d_features.shape[0])
-                new_x = np.linspace(0, 1, num_frames)
-                interpolated = np.zeros(
-                    (num_frames, i3d_features.shape[1]), dtype=np.float32
-                )
-                for c in range(i3d_features.shape[1]):
-                    interpolated[:, c] = np.interp(new_x, old_x, i3d_features[:, c])
-                i3d_features = interpolated
+        i3d_path = self.i3d_file_map.get(i3d_basename)
+        if i3d_path is None:
+            i3d_path = self.i3d_file_map.get(clean)
+        if i3d_path is None:
+            i3d_path = self.i3d_file_map.get(basename)
+        if i3d_path is None:
+            i3d_path = os.path.join(self.i3d_dir, f"{clean}.npy")
 
-        # Apply training-only data augmentations.
+        try:
+            i3d_features = load_i3d_npy(i3d_path)
+        except Exception as e:
+            import warnings
+
+            warnings.warn(
+                f"Failed to load I3D file {i3d_path}: {e}. Returning dummy zeros."
+            )
+            i3d_features = np.zeros((num_frames, 1024), dtype=np.float32)
+
+        # Align sequence length via interpolation.
+        if i3d_features.shape[0] == 0:
+            i3d_features = np.zeros((num_frames, 1024), dtype=np.float32)
+        elif num_frames <= 1 or i3d_features.shape[0] <= 1:
+            i3d_features = np.tile(i3d_features[0], (num_frames, 1))
+        elif i3d_features.shape[0] != num_frames:
+            old_x = np.linspace(0, 1, i3d_features.shape[0])
+            new_x = np.linspace(0, 1, num_frames)
+            interpolated = np.zeros(
+                (num_frames, i3d_features.shape[1]), dtype=np.float32
+            )
+            for c in range(i3d_features.shape[1]):
+                interpolated[:, c] = np.interp(new_x, old_x, i3d_features[:, c])
+            i3d_features = interpolated
+
+        return i3d_features
+
+    def _apply_augmentations(
+        self,
+        pose: np.ndarray,
+        left_hand: np.ndarray,
+        right_hand: np.ndarray,
+        face: np.ndarray,
+        i3d_features: np.ndarray | None,
+        num_frames: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, int]:
+        """Applies random horizontal flip, temporal dropping/duplication, and hand dropout using PyTorch RNG."""
+        # Horizontal mirroring.
+        if torch.rand(1).item() < 0.5:
+            pose[..., 0] = -pose[..., 0]
+            left_hand[..., 0] = -left_hand[..., 0]
+            right_hand[..., 0] = -right_hand[..., 0]
+            face[..., 0] = -face[..., 0]
+            left_hand, right_hand = right_hand.copy(), left_hand.copy()
+
+            # Swap symmetric joints.
+            if pose.shape[1] == 33:
+                sym_pairs = [
+                    (11, 12),
+                    (13, 14),
+                    (15, 16),
+                    (17, 18),
+                    (19, 20),
+                    (21, 22),
+                    (23, 24),
+                    (25, 26),
+                    (27, 28),
+                    (29, 30),
+                    (31, 32),
+                    (1, 4),
+                    (2, 5),
+                    (3, 6),
+                ]
+                for i, j in sym_pairs:
+                    pose[:, [i, j]] = pose[:, [j, i]]
+
+            if face.shape[1] == 92:
+                # 42 symmetric index pairs (0-indexed within 92-subset)
+                sym_pairs_face = [
+                    (0, 2),
+                    (3, 11),
+                    (4, 10),
+                    (5, 9),
+                    (6, 8),
+                    (12, 22),
+                    (13, 21),
+                    (14, 20),
+                    (15, 19),
+                    (16, 18),
+                    (23, 31),
+                    (24, 30),
+                    (25, 29),
+                    (26, 28),
+                    (32, 42),
+                    (33, 41),
+                    (34, 40),
+                    (35, 39),
+                    (36, 38),
+                    (43, 49),
+                    (44, 48),
+                    (45, 47),
+                    (50, 56),
+                    (51, 55),
+                    (52, 54),
+                    (58, 68),
+                    (59, 67),
+                    (60, 66),
+                    (61, 65),
+                    (62, 64),
+                    (69, 79),
+                    (70, 78),
+                    (71, 77),
+                    (72, 76),
+                    (73, 75),
+                    (80, 86),
+                    (81, 85),
+                    (82, 84),
+                    (88, 91),
+                    (89, 90),
+                    (17, 17),
+                    (27, 27),
+                ]
+                for i, j in sym_pairs_face:
+                    face[:, [i, j]] = face[:, [j, i]]
+
+        # Temporal jittering.
+        if torch.rand(1).item() < 0.5 and num_frames > 5:
+            num_to_change = max(1, int(num_frames * 0.1))
+            indices = list(range(num_frames))
+            if torch.rand(1).item() < 0.5:
+                # Drop indices
+                drop_indices = set(torch.randperm(num_frames)[:num_to_change].tolist())
+                indices = [i for i in indices if i not in drop_indices]
+            else:
+                # Duplicate indices
+                dup_indices = torch.randperm(num_frames)[:num_to_change].tolist()
+                for d_idx in dup_indices:
+                    indices.append(d_idx)
+                indices = sorted(indices)
+
+            pose = pose[indices]
+            left_hand = left_hand[indices]
+            right_hand = right_hand[indices]
+            face = face[indices]
+            if i3d_features is not None:
+                i3d_features = i3d_features[indices]
+            num_frames = len(indices)
+
+        # Hand joint dropout.
+        if torch.rand(1).item() < 0.05:
+            if torch.rand(1).item() < 0.5:
+                left_hand = np.zeros_like(left_hand)
+            else:
+                right_hand = np.zeros_like(right_hand)
+
+        return pose, left_hand, right_hand, face, i3d_features, num_frames
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        file_path = self.filepaths[idx]
+        basename = os.path.splitext(os.path.basename(file_path))[0]
+
+        # 1. Load landmarks with graceful fallback.
+        pose, left_hand, right_hand, face, num_frames, load_failed = (
+            self._load_landmarks(file_path)
+        )
+
+        # 2. Load and align I3D features.
+        i3d_features = self._load_and_align_i3d(basename, num_frames)
+
+        # 3. Apply training-only data augmentations.
         if self.is_training and not load_failed:
-            # Horizontal mirroring.
-            if np.random.rand() < 0.5:
-                pose[..., 0] = -pose[..., 0]
-                left_hand[..., 0] = -left_hand[..., 0]
-                right_hand[..., 0] = -right_hand[..., 0]
-                face[..., 0] = -face[..., 0]
-                left_hand, right_hand = right_hand.copy(), left_hand.copy()
+            pose, left_hand, right_hand, face, i3d_features, num_frames = (
+                self._apply_augmentations(
+                    pose, left_hand, right_hand, face, i3d_features, num_frames
+                )
+            )
 
-                # Swap symmetric joints.
-                if pose.shape[1] == 33:
-                    sym_pairs = [
-                        (1, 4),
-                        (2, 5),
-                        (3, 6),
-                        (7, 8),
-                        (9, 10),
-                        (11, 12),
-                        (13, 14),
-                        (15, 16),
-                        (17, 18),
-                        (19, 20),
-                        (21, 22),
-                        (23, 24),
-                        (25, 26),
-                        (27, 28),
-                        (29, 30),
-                        (31, 32),
-                    ]
-                    for i, j in sym_pairs:
-                        pose[:, [i, j]] = pose[:, [j, i]]
-
-                # Swap symmetric face landmarks (eyes, eyebrows, lips)
-                if face.shape[1] == 92:
-                    face_sym_pairs = [
-                        (48, 1),
-                        (49, 5),
-                        (50, 6),
-                        (51, 7),
-                        (52, 8),
-                        (53, 10),
-                        (54, 11),
-                        (55, 12),
-                        (56, 13),
-                        (57, 14),
-                        (58, 15),
-                        (59, 16),
-                        (60, 17),
-                        (61, 18),
-                        (62, 19),
-                        (64, 20),
-                        (65, 21),
-                        (66, 22),
-                        (67, 23),
-                        (68, 24),
-                        (69, 25),
-                        (70, 26),
-                        (71, 27),
-                        (72, 28),
-                        (73, 29),
-                        (74, 30),
-                        (75, 31),
-                        (76, 32),
-                        (77, 33),
-                        (78, 34),
-                        (79, 35),
-                        (80, 36),
-                        (81, 37),
-                        (82, 38),
-                        (83, 39),
-                        (84, 40),
-                        (85, 41),
-                        (86, 42),
-                        (87, 43),
-                        (88, 44),
-                        (89, 46),
-                        (91, 47),
-                    ]
-                    for i, j in face_sym_pairs:
-                        face[:, [i, j]] = face[:, [j, i]]
-
-            # Temporal jittering.
-            if np.random.rand() < 0.5 and num_frames > 5:
-                num_to_change = max(1, int(num_frames * 0.1))
-                indices = list(range(num_frames))
-                if np.random.rand() < 0.5:
-                    drop_indices = set(
-                        np.random.choice(num_frames, num_to_change, replace=False)
-                    )
-                    indices = [i for i in indices if i not in drop_indices]
-                else:
-                    dup_indices = np.random.choice(
-                        num_frames, num_to_change, replace=False
-                    )
-                    for d_idx in dup_indices:
-                        indices.append(d_idx)
-                    indices = sorted(indices)
-
-                pose = pose[indices]
-                left_hand = left_hand[indices]
-                right_hand = right_hand[indices]
-                face = face[indices]
-                if i3d_features is not None:
-                    i3d_features = i3d_features[indices]
-                num_frames = len(indices)
-
-            # Hand joint dropout.
-            if np.random.rand() < 0.05:
-                if np.random.rand() < 0.5:
-                    left_hand = np.zeros_like(left_hand)
-                else:
-                    right_hand = np.zeros_like(right_hand)
-
+        # 4. Normalize spatial coordinates.
         if self.normalize:
             pose, left_hand, right_hand, face = self._normalize_landmarks(
                 pose, left_hand, right_hand, face
             )
 
-        # Flatten and combine landmarks.
+        # 5. Flatten and combine landmarks.
         pose_flat = pose.reshape(num_frames, -1)
         left_hand_flat = left_hand.reshape(num_frames, -1)
         right_hand_flat = right_hand.reshape(num_frames, -1)
-
         manual_feats = np.concatenate(
             [pose_flat, left_hand_flat, right_hand_flat], axis=1
         )
@@ -359,7 +385,7 @@ class ASLLandmarkDataset(Dataset):
         else:
             features = manual_feats
 
-        # Stride-based downsampling.
+        # 6. Stride-based downsampling.
         seq_len = len(features)
         if seq_len > self.max_len:
             stride = int(np.ceil(seq_len / self.max_len))

@@ -160,6 +160,7 @@ def main():
         max_len=args.max_len,
         include_face=include_face,
         i3d_dir=args.i3d_dir,
+        training=True,
     )
     val_dataset = ASLLandmarkDataset(
         data_dir=args.data_dir,
@@ -168,6 +169,7 @@ def main():
         max_len=args.max_len,
         include_face=include_face,
         i3d_dir=args.i3d_val_dir if args.i3d_val_dir is not None else args.i3d_dir,
+        training=False,
     )
 
     # 5. Collator
@@ -197,6 +199,14 @@ def main():
 
     # Calculate warmup steps dynamically based on dataset size, epochs, and gradient accumulation
     # 7. Define Seq2Seq Training Arguments
+    report_to = "none"
+    try:
+        import tensorboard  # noqa: F401
+
+        report_to = "tensorboard"
+    except ImportError:
+        pass
+
     training_args = Seq2SeqTrainingArguments(
         output_dir=args.output_dir,
         num_train_epochs=args.epochs,
@@ -214,7 +224,7 @@ def main():
         generation_max_length=30,  # Added per requirements
         generation_num_beams=1,  # Enable greedy search (beam width 1) during training validation to speed up evaluation epochs
         fp16=torch.cuda.is_available(),  # Use mixed precision if GPU available
-        report_to="tensorboard",  # Enables TensorBoard logging without wandb prompts on Kaggle
+        report_to=report_to,  # Enables TensorBoard logging if installed
         remove_unused_columns=False,
         warmup_ratio=0.1,  # Dynamic warmup ratio to stabilize training early
         load_best_model_at_end=True,
