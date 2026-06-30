@@ -1,6 +1,6 @@
 # Gloss-Free ASL-to-English Translation
 
-A deep learning framework to translate American Sign Language (ASL) video coordinates directly into fluent English sentences without using intermediate gloss representations. The project connects a custom **Conformer Encoder** directly to a pretrained **Hugging Face T5 Decoder** (supporting `t5-small` or `t5-base`) to perform end-to-end visual-to-text sequence generation. It also optionally incorporates precomputed spatiotemporal features (e.g. from an **I3D network**) via a **Gated Multimodal Fusion** mechanism.
+A deep learning framework to translate American Sign Language (ASL) video coordinates directly into fluent English sentences without using intermediate gloss representations. The project connects a custom **Conformer Encoder** directly to a pretrained **Hugging Face T5 Decoder** (supporting `t5-small`, `t5-base`, `t5-large`, or `google/flan-t5-large`) to perform end-to-end visual-to-text sequence generation. It also optionally incorporates precomputed spatiotemporal features (e.g. from an **I3D network**) via a **Gated Multimodal Fusion** mechanism.
 
 ## Motivation
 
@@ -194,5 +194,5 @@ The training entry point (`src/train.py`) supports the following customized conf
 | `--max_len` | `int` | `150` | Maximum frame sequence length (caps longer sequences to prevent OOM) |
 | `--max_target_len` | `int` | `30` | Maximum target text sequence token length |
 | `--resume_from_checkpoint` | `str` | `None` | Path to checkpoint directory to resume from, or `'latest'` to auto-detect |
-| `--t5_model` | `str` | `t5-small` | Hugging Face T5 decoder checkpoint (`t5-small` or `t5-base`) |
+| `--t5_model` | `str` | `t5-small` | Hugging Face T5 decoder checkpoint (`t5-small`, `t5-base`, `t5-large`, or `google/flan-t5-large`) |
 | `--i3d_dir` | `str` | `None` | Path to precomputed I3D features directory (enables Multi-Stream Gated Fusion) |
