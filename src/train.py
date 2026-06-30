@@ -214,7 +214,7 @@ def main():
         generation_max_length=30,  # Added per requirements
         generation_num_beams=1,  # Enable greedy search (beam width 1) during training validation to speed up evaluation epochs
         fp16=torch.cuda.is_available(),  # Use mixed precision if GPU available
-        report_to="none",  # Prevents wandb prompts on Kaggle
+        report_to="tensorboard",  # Enables TensorBoard logging without wandb prompts on Kaggle
         remove_unused_columns=False,
         warmup_ratio=0.1,  # Dynamic warmup ratio to stabilize training early
         load_best_model_at_end=True,

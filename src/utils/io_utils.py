@@ -3,17 +3,12 @@
 from __future__ import annotations
 
 import glob
-import json
 import os
 from pathlib import Path
 
 import numpy as np
 
-# Optional fast JSON parser
-try:
-    import orjson
-except ImportError:
-    orjson = None
+# Optional fast JSON parser removed (unused)
 
 
 # MediaPipe format constants
@@ -112,13 +107,7 @@ MEDIAPIPE_FACE_SUBSET_INDICES = sorted(
 )
 
 
-def load_json(filepath: str | Path) -> dict:
-    """Load JSON file."""
-    with open(filepath, "rb") as f:
-        content = f.read()
-    if orjson is not None:
-        return orjson.loads(content)
-    return json.loads(content)
+# load_json helper removed (unused)
 
 
 def load_holistic_npy(filepath: str | Path) -> dict[str, np.ndarray]:
