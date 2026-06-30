@@ -123,6 +123,11 @@ def main():
     )
     args = parser.parse_args()
 
+    # Suppress redundant missing I3D warnings to prevent console output flood
+    import warnings
+
+    warnings.filterwarnings("ignore", message=".*Failed to load I3D.*")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training on device: {device}")
 
