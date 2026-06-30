@@ -1,6 +1,31 @@
 # Gloss-Free ASL-to-English Translation
 
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+[![PyTorch 2.0+](https://img.shields.io/badge/pytorch-2.0+-orange.svg)](https://pytorch.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+
 A deep learning framework to translate American Sign Language (ASL) video coordinates directly into fluent English sentences without using intermediate gloss representations. The project connects a custom **Conformer Encoder** directly to a pretrained **Hugging Face T5 Decoder** (supporting `t5-small`, `t5-base`, `t5-large`, or `google/flan-t5-large`) to perform end-to-end visual-to-text sequence generation. It also optionally incorporates precomputed spatiotemporal features (e.g. from an **I3D network**) via a **Gated Multimodal Fusion** mechanism.
+
+---
+
+## 📖 Table of Contents
+* [Motivation](#motivation)
+* [Key Features](#key-features)
+* [Demo & Results](#demo)
+* [Architecture](#architecture)
+* [Setup & Installation](#local-setup--installation)
+* [Usage & CLI Reference](#training-options)
+
+---
+
+## Key Features
+
+* **Gloss-Free Sequence Generation**: Maps visual trajectories directly to English text, bypassing the traditional gloss-bottleneck.
+* **Gated Multimodal Fusion**: Dynamically balances 3D hand/pose landmarks and dense video features (I3D) frame-by-frame.
+* **Expressive Face Mesh Subset**: Selects an optimized 92-point facial subset (80% dimension reduction) to preserve ASL non-manual grammar markers.
+* **Signer Leakage Safeguards**: Automates split isolation by channel/uploader ID to ensure metric validity on unseen signers.
+* **Reproducible Augmentation RNG**: Utilizes PyTorch generators for multi-worker data loading safety.
 
 ## Motivation
 
