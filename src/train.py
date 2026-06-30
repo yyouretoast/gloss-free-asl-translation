@@ -238,7 +238,7 @@ def main():
         # --- Performance & Memory Enhancements ---
         optim="adafactor",  # Native T5 optimizer, saves massive VRAM
         gradient_checkpointing=True,  # Reduces activation memory footprint
-        dataloader_num_workers=2,  # Parallelizes CPU data fetching
+        dataloader_num_workers=1,  # 1 worker per GPU process prevents context-switching thrashing on Kaggle's 4 CPU cores
         dataloader_pin_memory=True,  # Accelerates CPU-to-GPU data transfers
     )
 
