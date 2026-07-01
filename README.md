@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-A deep learning framework to translate American Sign Language (ASL) video coordinates directly into fluent English sentences without using intermediate gloss representations. The project connects a custom **Conformer Encoder** directly to a pretrained **Hugging Face T5 Decoder** (supporting `t5-small`, `t5-base`, `t5-large`, or `google/flan-t5-large`) to perform end-to-end visual-to-text sequence generation. It also optionally incorporates precomputed spatiotemporal features (e.g. from an **I3D network**) via a **Gated Multimodal Fusion** mechanism.
+A deep learning framework to translate American Sign Language (ASL) video coordinates directly into fluent English sentences without using intermediate gloss representations. The project connects a custom **Conformer Encoder** directly to a pretrained **Hugging Face T5 Decoder** (supporting `t5-small`, `t5-base`, `google/flan-t5-base`, `t5-large`, or `google/flan-t5-large`) to perform end-to-end visual-to-text sequence generation. It also optionally incorporates precomputed spatiotemporal features (e.g. from an **I3D network**) via a **Gated Multimodal Fusion** mechanism.
 
 ---
 
@@ -219,5 +219,27 @@ The training entry point (`src/train.py`) supports the following customized conf
 | `--max_len` | `int` | `150` | Maximum frame sequence length (caps longer sequences to prevent OOM) |
 | `--max_target_len` | `int` | `30` | Maximum target text sequence token length |
 | `--resume_from_checkpoint` | `str` | `None` | Path to checkpoint directory to resume from, or `'latest'` to auto-detect |
-| `--t5_model` | `str` | `t5-small` | Hugging Face T5 decoder checkpoint (`t5-small`, `t5-base`, `t5-large`, or `google/flan-t5-large`) |
+| `--t5_model` | `str` | `t5-small` | Hugging Face T5 decoder checkpoint (`t5-small`, `t5-base`, `google/flan-t5-base`, `t5-large`, or `google/flan-t5-large`) |
 | `--i3d_dir` | `str` | `None` | Path to precomputed I3D features directory (enables Multi-Stream Gated Fusion) |
+
+### Evaluation & Inference Options
+
+The evaluation (`scripts/evaluate.py`) and inference (`scripts/inference.py`) scripts support the following generation and decoding flags:
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--num-beams` / `--num_beams` | `int` | `5` | Number of beams for sequence generation (beam search width) |
+| `--length-penalty` / `--length_penalty` | `float` | `1.0` | Length penalty ($\alpha$) for sequence generation (rewards/penalizes length) |
+| `--repetition-penalty` / `--repetition_penalty` | `float` | `1.0` | Repetition penalty to discourage generating the same tokens |
+
+#### Tuning Generation Outputs (Brevity Penalty Math)
+
+During evaluation, pretrained decoders like T5 tend to prefer shorter sequences, which severely hurts translation BLEU metrics due to the built-in **Brevity Penalty (BP)**:
+
+$$BP = \exp\left(1 - \frac{\text{Reference Length}}{\text{Prediction Length}}\right)$$
+
+If the generated translation is too short, $BP$ acts as a severe multiplier penalty on the final BLEU score. To counteract this without retraining, you can tune the beam search scorer parameters at inference:
+*   **Length Penalty ($\alpha > 1.0$)**: Adjusts the beam score denominator by:
+    $$\text{Score}(Y) = \frac{\log P(Y)}{\left( \frac{5 + |Y|}{6} \right)^{\alpha}}$$
+    Setting $\alpha = 1.2$ or $1.5$ rewards longer predictions, lifting the brevity penalty.
+*   **Repetition Penalty ($> 1.0$)**: Discounts log probabilities of tokens that have already been generated, preventing infinite loops (e.g. *"a little bit of a little bit of..."*).
