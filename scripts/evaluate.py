@@ -34,6 +34,8 @@ def evaluate(
     device: str = "auto",
     i3d_dir: str | None = None,
     num_beams: int = 5,
+    length_penalty: float = 1.0,
+    repetition_penalty: float = 1.0,
 ) -> None:
     if not jiwer or not sacrebleu:
         print(
@@ -159,6 +161,8 @@ def evaluate(
                     input_i3d_features=i3d_feats,
                     max_new_tokens=30,
                     num_beams=num_beams,
+                    length_penalty=length_penalty,
+                    repetition_penalty=repetition_penalty,
                 )
 
                 preds = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
@@ -272,6 +276,22 @@ def main() -> None:
         help="Number of beams for sequence generation.",
     )
     parser.add_argument(
+        "--length-penalty",
+        "--length_penalty",
+        dest="length_penalty",
+        type=float,
+        default=1.0,
+        help="Length penalty for sequence generation.",
+    )
+    parser.add_argument(
+        "--repetition-penalty",
+        "--repetition_penalty",
+        dest="repetition_penalty",
+        type=float,
+        default=1.0,
+        help="Repetition penalty for sequence generation.",
+    )
+    parser.add_argument(
         "--device", type=str, default="auto", choices=["auto", "cpu", "cuda"]
     )
 
@@ -288,6 +308,8 @@ def main() -> None:
         device=args.device,
         i3d_dir=args.i3d_dir,
         num_beams=args.num_beams,
+        length_penalty=args.length_penalty,
+        repetition_penalty=args.repetition_penalty,
     )
 
 
