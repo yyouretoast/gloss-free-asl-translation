@@ -345,6 +345,51 @@ class ASLLandmarkDataset(Dataset):
 
         return pose, left_hand, right_hand, face, i3d_features, num_frames
 
+    def _apply_spatial_augmentations(
+        self,
+        pose: np.ndarray,
+        left_hand: np.ndarray,
+        right_hand: np.ndarray,
+        face: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Applies random 3D rotation, scaling, and translation jitter to normalized coordinates."""
+        # 1. Random Scaling: scale between 0.95 and 1.05
+        scale = 0.95 + torch.rand(1).item() * 0.1
+
+        # 2. Random 3D Rotation: yaw, pitch, roll angles within [-5, 5] degrees (approx -0.087 to +0.087 radians)
+        angles = (torch.rand(3) * 2.0 - 1.0) * 0.087  # -5 to +5 degrees in radians
+        alpha, beta, gamma = angles[0].item(), angles[1].item(), angles[2].item()
+
+        # Compute rotation matrix R
+        cos_a, sin_a = np.cos(alpha), np.sin(alpha)
+        cos_b, sin_b = np.cos(beta), np.sin(beta)
+        cos_g, sin_g = np.cos(gamma), np.sin(gamma)
+
+        R_x = np.array(
+            [[1, 0, 0], [0, cos_a, -sin_a], [0, sin_a, cos_a]], dtype=np.float32
+        )
+
+        R_y = np.array(
+            [[cos_b, 0, sin_b], [0, 1, 0], [-sin_b, 0, cos_b]], dtype=np.float32
+        )
+
+        R_z = np.array(
+            [[cos_g, -sin_g, 0], [sin_g, cos_g, 0], [0, 0, 1]], dtype=np.float32
+        )
+
+        R = R_x @ R_y @ R_z
+
+        # 3. Random Translation Jitter: translation offset within [-0.02, 0.02]
+        translation = (torch.rand(3).numpy() * 2.0 - 1.0) * 0.02
+
+        # Apply to spatial (x, y, z) coordinates (first 3 channels)
+        pose[..., :3] = (pose[..., :3] @ R) * scale + translation
+        left_hand[..., :3] = (left_hand[..., :3] @ R) * scale + translation
+        right_hand[..., :3] = (right_hand[..., :3] @ R) * scale + translation
+        face[..., :3] = (face[..., :3] @ R) * scale + translation
+
+        return pose, left_hand, right_hand, face
+
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         file_path = self.filepaths[idx]
         basename = os.path.splitext(os.path.basename(file_path))[0]
@@ -368,6 +413,12 @@ class ASLLandmarkDataset(Dataset):
         # 4. Normalize spatial coordinates.
         if self.normalize:
             pose, left_hand, right_hand, face = self._normalize_landmarks(
+                pose, left_hand, right_hand, face
+            )
+
+        # Apply random spatial (3D rotation, scaling, translation) augmentations during training
+        if self.is_training and not load_failed:
+            pose, left_hand, right_hand, face = self._apply_spatial_augmentations(
                 pose, left_hand, right_hand, face
             )
 
